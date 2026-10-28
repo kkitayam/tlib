@@ -94,7 +94,7 @@ set (TARGET_WORD_SIZE "32" CACHE STRING "Target word size")
 message(VERBOSE "Target is: ${TARGET_WORD_SIZE}-bit ${TARGET_ARCH}")
 
 set_property (CACHE HOST_ARCH PROPERTY STRINGS i386 arm aarch64)
-set_property (CACHE TARGET_ARCH PROPERTY STRINGS i386 x86_64 arm arm-m arm64 sparc ppc ppc64 riscv riscv64 xtensa)
+set_property (CACHE TARGET_ARCH PROPERTY STRINGS i386 x86_64 arm arm-m arm64 sparc ppc ppc64 riscv riscv64 xtensa rx)
 
 if(NOT HOST_ARCH)
     message (FATAL_ERROR "Host architecture not set")
