@@ -231,9 +231,17 @@ file (GLOB SOURCES
     ${ARM_COMMON_SRC}
     )
 
-add_library (tlib SHARED ${SOURCES})
+# Static output is used by the standalone test harnesses in tlib-rx-test. It
+# keeps the default shared-library build (used by Renode) unchanged.
+option (TLIB_STATIC "Build tlib as a static library" OFF)
+if(TLIB_STATIC)
+    add_library (tlib STATIC ${SOURCES} $<TARGET_OBJECTS:tcg>)
+else()
+    add_library (tlib SHARED ${SOURCES})
+endif()
 add_dependencies (tlib tcg)
 set_property(TARGET tlib PROPERTY C_STANDARD 11)
+target_include_directories (tlib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 if("${TARGET_ACTUAL_ARCH}" STREQUAL "i386")
     set (MATH_LIB_LINK_ARG "-lm" CACHE STRING
@@ -261,6 +269,13 @@ if ((NOT (${CMAKE_HOST_SYSTEM_NAME} MATCHES "(Windows|CYGWIN)" )) AND ("${C_COMP
     set (Z_OPTS -zdefs)
 endif()
 
+if(TLIB_STATIC)
+    # tcg objects are embedded directly into the archive above.
+    set(TCG_LINK_ARG "")
+else()
+    set(TCG_LINK_ARG tcg)
+endif()
+
 target_link_libraries (tlib
     ${OLD_GLIBC_WRAPPERS}
     -fPIC
@@ -269,7 +284,7 @@ target_link_libraries (tlib
     ${MATH_LIB_LINK_ARG}
     ${PTREAD_OPT}
     ${SOFTFLOAT3}
-    tcg
+    ${TCG_LINK_ARG}
     )
 
 # Make GDB's symbol lookup find the `cpu` symbol from the current library
