@@ -33,6 +33,12 @@
 #define PSW_IPL_MASK 0x0F000000
 #define PSW_IPL_SHIFT 24
 
+/* External interrupt sources. The platform owns the vector table; the CPU only
+ * tracks request and priority state. */
+#define RX_INTERRUPT_VECTORS     256
+#define RX_NMI_VECTOR_ADDRESS    0xFFFFFFF8u
+#define RX_INTERRUPT_STACK_SIZE  32
+
 typedef struct CPUState {
     uint32_t regs[16];
     uint32_t pc;
@@ -53,6 +59,17 @@ typedef struct CPUState {
     uint32_t cpen;
     /* MOVLI/MOVCO link flag */
     bool link_flag;
+
+    /* External interrupt requests and their priorities, indexed by vector. A
+     * priority of zero keeps a vector disabled. */
+    uint8_t irq_pending[RX_INTERRUPT_VECTORS];
+    uint8_t irq_priority[RX_INTERRUPT_VECTORS];
+    bool nmi_pending;
+
+    /* Vectors of the exception frames currently on the stack. Used only to
+     * pair the tlib interrupt begin/end callbacks, which RTE completes. */
+    uint32_t interrupt_stack[RX_INTERRUPT_STACK_SIZE];
+    uint32_t interrupt_depth;
 
     /* RXv3 SAVE/RSTR register banks (R1-R15, USP, FPSW, ACC0, ACC1). */
     struct {
@@ -96,9 +113,15 @@ static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)
     env->pc = tb->pc;
 }
 
+void rx_set_irq_pending(CPUState *env, uint32_t vector, bool pending);
+void rx_set_irq_priority(CPUState *env, uint32_t vector, uint32_t priority);
+void rx_set_nmi_pending(CPUState *env, bool pending);
+bool rx_has_work(CPUState *env);
+void rx_interrupt_return(CPUState *env);
+
 static inline bool cpu_has_work(CPUState *env)
 {
-    return !env->wfi;
+    return !env->wfi || rx_has_work(env);
 }
 
 void rx_reset_state(CPUState *env);
