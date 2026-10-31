@@ -1516,12 +1516,16 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                             env->psw |= PSW_U;
                         }
                         env->link_flag = false;
+                        rx_interrupt_return(env);
                         SET_JUMP(new_pc);
                     }
                     break;
                 case 0x96: /* WAIT */
                     if(ex) {
                         env->wfi = true;
+                        /* cpu_loop_exit skips the common PC update, but a
+                         * wake-up must resume after WAIT, not at it. */
+                        env->pc = pc + r.off;
                         env->exception_index = EXCP_WFI;
                         cpu_loop_exit(env);
                     }
