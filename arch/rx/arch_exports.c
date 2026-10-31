@@ -30,6 +30,29 @@ void tlib_rx_set_acc1(uint64_t value)
 
 EXC_VOID_1(tlib_rx_set_acc1, uint64_t, value)
 
+/* External interrupt inputs. The platform supplies the vector table through
+ * INTB; the priority of a vector is programmed separately, as in the RX ICU. */
+void tlib_rx_set_interrupt_pending(uint32_t vector, uint32_t pending)
+{
+    rx_set_irq_pending(cpu, vector, pending != 0);
+}
+
+EXC_VOID_2(tlib_rx_set_interrupt_pending, uint32_t, vector, uint32_t, pending)
+
+void tlib_rx_set_interrupt_priority(uint32_t vector, uint32_t priority)
+{
+    rx_set_irq_priority(cpu, vector, priority);
+}
+
+EXC_VOID_2(tlib_rx_set_interrupt_priority, uint32_t, vector, uint32_t, priority)
+
+void tlib_rx_set_nmi_pending(uint32_t pending)
+{
+    rx_set_nmi_pending(cpu, pending != 0);
+}
+
+EXC_VOID_1(tlib_rx_set_nmi_pending, uint32_t, pending)
+
 void tlib_set_single_step(uint32_t enabled)
 {
     cpu->singlestep_enabled = enabled;
