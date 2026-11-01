@@ -36,6 +36,8 @@
 /* External interrupt sources. The platform owns the vector table; the CPU only
  * tracks request and priority state. */
 #define RX_INTERRUPT_VECTORS     256
+/* EXTB resets to 0xFFFFFF80, so the NMI vector is 0xFFFFFF80 + 0x78. EXTB is
+ * not modelled yet; the reset value is therefore used unconditionally. */
 #define RX_NMI_VECTOR_ADDRESS    0xFFFFFFF8u
 #define RX_INTERRUPT_STACK_SIZE  32
 
