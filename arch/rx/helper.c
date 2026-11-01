@@ -45,7 +45,9 @@ static int rx_select_interrupt(CPUState *env, uint32_t *priority)
     int best = -1;
     int vector;
 
-    if((env->psw & (PSW_I | PSW_PM)) != PSW_I) {
+    /* The RXv2 manual only masks interrupts with PSW.I; PSW.PM does not stop
+     * acceptance. An exception always switches to supervisor mode. */
+    if(!(env->psw & PSW_I)) {
         return -1;
     }
 
@@ -180,12 +182,12 @@ int process_interrupt(int interrupt_request, CPUState *env)
         return 0;
     }
 
-    /* NMI ignores PSW.I and PSW.IPL and always uses the fixed vector. It does
-     * not change PSW.IPL, but it does switch to the interrupt stack. */
+    /* NMI ignores PSW.I and PSW.IPL and always uses the fixed reset vector.
+     * The manual sets PSW.IPL to 15 on NMI entry. */
     if(env->nmi_pending) {
         env->nmi_pending = false;
         handler = ldl_phys(RX_NMI_VECTOR_ADDRESS);
-        new_psw = env->psw & ~(PSW_I | PSW_U | PSW_PM);
+        new_psw = (env->psw & ~(PSW_I | PSW_U | PSW_PM | PSW_IPL_MASK)) | PSW_IPL_MASK;
         rx_enter_interrupt(env, RX_NMI_VECTOR_ADDRESS, handler, new_psw);
         rx_refresh_interrupt_request(env);
         return 1;
