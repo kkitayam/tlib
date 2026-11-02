@@ -20,7 +20,8 @@
 #define MMU_MODE0_SUFFIX _user
 #define MMU_MODE1_SUFFIX _kernel
 
-#define EXCP_RX_ILLEGAL_INSTRUCTION 4
+#define EXCP_RX_ILLEGAL_INSTRUCTION     4
+#define EXCP_RX_PRIVILEGED_INSTRUCTION  5
 
 /* PSW flags */
 #define PSW_CARRY    0x00000001
@@ -36,10 +37,14 @@
 /* External interrupt sources. The platform owns the vector table; the CPU only
  * tracks request and priority state. */
 #define RX_INTERRUPT_VECTORS     256
-/* EXTB resets to 0xFFFFFF80, so the NMI vector is 0xFFFFFF80 + 0x78. EXTB is
- * not modelled yet; the reset value is therefore used unconditionally. */
-#define RX_NMI_VECTOR_ADDRESS    0xFFFFFFF8u
-#define RX_INTERRUPT_STACK_SIZE  32
+/* Exception vectors live at EXTB + a fixed offset (RXv2 manual 1.7.1). EXTB
+ * resets to 0xFFFFFF80, so NMI starts at 0xFFFFFFF8. */
+#define RX_EXTB_RESET                    0xFFFFFF80u
+#define RX_EXCEPTION_PRIVILEGED_OFFSET   0x50u
+#define RX_EXCEPTION_UNDEFINED_OFFSET    0x5Cu
+#define RX_NMI_VECTOR_OFFSET             0x78u
+#define RX_NMI_VECTOR_ADDRESS            (RX_EXTB_RESET + RX_NMI_VECTOR_OFFSET)
+#define RX_INTERRUPT_STACK_SIZE          32
 
 typedef struct CPUState {
     uint32_t regs[16];
@@ -48,6 +53,7 @@ typedef struct CPUState {
     uint32_t usp;
     uint32_t isp;
     uint32_t intb;
+    uint32_t extb;
     uint32_t bpsw;
     uint32_t bpc;
     uint32_t fintv;

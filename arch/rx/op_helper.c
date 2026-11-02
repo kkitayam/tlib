@@ -455,6 +455,7 @@ static int rx_get_control_register(CPUState *env, int cr, uint32_t *value)
         case 0xa: *value = env->isp; return 1;
         case 0xb: *value = env->fintv; return 1;
         case 0xc: *value = env->intb; return 1;
+        case 0xd: *value = env->extb; return 1;
         default: *value = 0; return 0;
     }
 }
@@ -482,6 +483,7 @@ static int rx_set_control_register(CPUState *env, int cr, uint32_t value)
         case 0xa: env->isp = value; return 1;
         case 0xb: env->fintv = value; return 1;
         case 0xc: env->intb = value; return 1;
+        case 0xd: env->extb = value; return 1;
         default: return 0;
     }
 }
@@ -829,6 +831,14 @@ static int rx_memex_size(int mx)
 static int rx_memex_signed(int mx)
 {
     return mx != 3;
+}
+
+/* Privileged instruction exception, raised in user mode (PSW.PM = 1). The
+ * saved PC is the faulting instruction itself (instruction canceling type). */
+static void rx_raise_privileged(CPUState *env)
+{
+    env->exception_index = EXCP_RX_PRIVILEGED_INSTRUCTION;
+    cpu_loop_exit(env);
 }
 
 /*
@@ -1315,6 +1325,9 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
             if(b0 == 0x75 && opsel == 0x7) { /* MVTIPL */
                 uint32_t ipl = rx_next8(&r);
                 if(ex) {
+                    if(env->psw & PSW_PM) {
+                        rx_raise_privileged(env);
+                    }
                     env->psw = (env->psw & ~PSW_IPL_MASK) | ((ipl & 0xf) << PSW_IPL_SHIFT);
                 }
                 break;
@@ -1502,6 +1515,9 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 case 0x93: rx_do_satr(env, ex); break;
                 case 0x94: /* RTTI */
                     if(ex) {
+                        if(env->psw & PSW_PM) {
+                            rx_raise_privileged(env);
+                        }
                         env->psw = env->bpsw;
                         SET_JUMP(env->bpc);
                         env->link_flag = false;
@@ -1509,8 +1525,13 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                     break;
                 case 0x95: /* RTE */
                     if(ex) {
-                        uint32_t new_pc = rx_pop(env, ex);
-                        uint32_t new_psw = rx_pop(env, ex);
+                        uint32_t new_pc;
+                        uint32_t new_psw;
+                        if(env->psw & PSW_PM) {
+                            rx_raise_privileged(env);
+                        }
+                        new_pc = rx_pop(env, ex);
+                        new_psw = rx_pop(env, ex);
                         env->psw = new_psw;
                         if(env->psw & PSW_PM) {
                             env->psw |= PSW_U;
@@ -1522,6 +1543,12 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                     break;
                 case 0x96: /* WAIT */
                     if(ex) {
+                        if(env->psw & PSW_PM) {
+                            rx_raise_privileged(env);
+                        }
+                        /* The manual makes WAIT enable interrupts before the
+                         * CPU stops, so a pending request can wake it. */
+                        env->psw |= PSW_I;
                         env->wfi = true;
                         /* cpu_loop_exit skips the common PC update, but a
                          * wake-up must resume after WAIT, not at it. */

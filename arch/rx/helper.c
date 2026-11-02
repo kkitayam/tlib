@@ -186,7 +186,7 @@ int process_interrupt(int interrupt_request, CPUState *env)
      * The manual sets PSW.IPL to 15 on NMI entry. */
     if(env->nmi_pending) {
         env->nmi_pending = false;
-        handler = ldl_phys(RX_NMI_VECTOR_ADDRESS);
+        handler = ldl_phys(env->extb + RX_NMI_VECTOR_OFFSET);
         new_psw = (env->psw & ~(PSW_I | PSW_U | PSW_PM | PSW_IPL_MASK)) | PSW_IPL_MASK;
         rx_enter_interrupt(env, RX_NMI_VECTOR_ADDRESS, handler, new_psw);
         rx_refresh_interrupt_request(env);
@@ -227,6 +227,7 @@ void rx_reset_state(CPUState *env)
     env->usp = 0;
     env->isp = 0;
     env->intb = 0;
+    env->extb = RX_EXTB_RESET;
     env->bpsw = 0;
     env->bpc = 0;
     env->fintv = 0;
@@ -309,12 +310,16 @@ void do_interrupt(CPUState *env)
         return;
     }
 
-    if(env->intb == 0) {
+    if(vector == EXCP_RX_ILLEGAL_INSTRUCTION) {
+        handler = ldl_phys(env->extb + RX_EXCEPTION_UNDEFINED_OFFSET);
+    } else if(vector == EXCP_RX_PRIVILEGED_INSTRUCTION) {
+        handler = ldl_phys(env->extb + RX_EXCEPTION_PRIVILEGED_OFFSET);
+    } else if(env->intb == 0) {
         tlib_abortf("RX: exception %u with no vector table (INTB=0) at PC=0x%08x", vector, env->pc);
         return;
+    } else {
+        handler = ldl_phys(env->intb + vector * 4);
     }
-
-    handler = ldl_phys(env->intb + vector * 4);
 
     /* Interrupt/exception entry: PSW.I, PSW.U and PSW.PM are cleared and the
      * old PSW and the return PC are pushed on the interrupt stack. The return
