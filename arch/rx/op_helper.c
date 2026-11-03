@@ -1513,14 +1513,18 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 case 0x8b: rx_do_smovb(env, ex); break;
                 case 0x8f: rx_do_smovf(env, ex); break;
                 case 0x93: rx_do_satr(env, ex); break;
-                case 0x94: /* RTTI */
+                case 0x94: /* RTFI */
                     if(ex) {
                         if(env->psw & PSW_PM) {
                             rx_raise_privileged(env);
                         }
                         env->psw = env->bpsw;
-                        SET_JUMP(env->bpc);
+                        if(env->psw & PSW_PM) {
+                            env->psw |= PSW_U;
+                        }
                         env->link_flag = false;
+                        rx_interrupt_return(env);
+                        SET_JUMP(env->bpc);
                     }
                     break;
                 case 0x95: /* RTE */

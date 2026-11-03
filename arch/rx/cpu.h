@@ -74,6 +74,12 @@ typedef struct CPUState {
     uint8_t irq_priority[RX_INTERRUPT_VECTORS];
     bool nmi_pending;
 
+    /* Fast interrupt designation (ICU FIR.FIEN/FVCT). The selected vector is
+     * delivered through FINTV with PSW/BPC saved in BPSW/BPC instead of on the
+     * stack, and always takes priority level 15. */
+    bool fast_irq_enabled;
+    uint32_t fast_irq_vector;
+
     /* Vectors of the exception frames currently on the stack. Used only to
      * pair the tlib interrupt begin/end callbacks, which RTE completes. */
     uint32_t interrupt_stack[RX_INTERRUPT_STACK_SIZE];
@@ -124,6 +130,7 @@ static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)
 void rx_set_irq_pending(CPUState *env, uint32_t vector, bool pending);
 void rx_set_irq_priority(CPUState *env, uint32_t vector, uint32_t priority);
 void rx_set_nmi_pending(CPUState *env, bool pending);
+void rx_set_fast_interrupt_vector(CPUState *env, uint32_t vector, bool enabled);
 bool rx_has_work(CPUState *env);
 void rx_interrupt_return(CPUState *env);
 
