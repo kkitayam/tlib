@@ -53,6 +53,15 @@ void tlib_rx_set_nmi_pending(uint32_t pending)
 
 EXC_VOID_1(tlib_rx_set_nmi_pending, uint32_t, pending)
 
+/* Selects the ICU fast-interrupt source (FIR.FVCT/FIEN). The handler address
+ * itself is programmed by guest software through FINTV. */
+void tlib_rx_set_fast_interrupt_vector(uint32_t vector, uint32_t enabled)
+{
+    rx_set_fast_interrupt_vector(cpu, vector, enabled != 0);
+}
+
+EXC_VOID_2(tlib_rx_set_fast_interrupt_vector, uint32_t, vector, uint32_t, enabled)
+
 void tlib_set_single_step(uint32_t enabled)
 {
     cpu->singlestep_enabled = enabled;

@@ -16,6 +16,9 @@ static bool rx_any_interrupt_pending(const CPUState *env)
     if(env->nmi_pending) {
         return true;
     }
+    if(env->fast_irq_enabled && env->irq_pending[env->fast_irq_vector]) {
+        return true;
+    }
     for(vector = 0; vector < RX_INTERRUPT_VECTORS; vector++) {
         if(env->irq_pending[vector]) {
             return true;
@@ -38,12 +41,14 @@ static void rx_refresh_interrupt_request(CPUState *env)
 
 /* Highest-priority enabled vector that outranks the current PSW.IPL. Ties go
  * to the lower vector number. Returns -1 when nothing may be taken. */
-static int rx_select_interrupt(CPUState *env, uint32_t *priority)
+static int rx_select_interrupt(CPUState *env, uint32_t *priority, bool *fast)
 {
     uint32_t current_ipl;
     uint32_t best_priority = 0;
     int best = -1;
     int vector;
+
+    *fast = false;
 
     /* The RXv2 manual only masks interrupts with PSW.I; PSW.PM does not stop
      * acceptance. An exception always switches to supervisor mode. */
@@ -52,6 +57,19 @@ static int rx_select_interrupt(CPUState *env, uint32_t *priority)
     }
 
     current_ipl = (env->psw & PSW_IPL_MASK) >> PSW_IPL_SHIFT;
+
+    /* A fast interrupt has the highest priority (15) and wins over the normal
+     * arbitration when its vector is pending and enabled. A zero priority
+     * still disables the source, as for normal interrupts. */
+    if(env->fast_irq_enabled) {
+        vector = (int)env->fast_irq_vector;
+        if(env->irq_pending[vector] && env->irq_priority[vector] != 0 && current_ipl < 15) {
+            *priority = 15;
+            *fast = true;
+            return vector;
+        }
+    }
+
     for(vector = 0; vector < RX_INTERRUPT_VECTORS; vector++) {
         uint32_t candidate;
 
@@ -78,11 +96,12 @@ static int rx_select_interrupt(CPUState *env, uint32_t *priority)
 bool rx_has_work(CPUState *env)
 {
     uint32_t priority;
+    bool fast;
 
     if(env->nmi_pending) {
         return true;
     }
-    return rx_select_interrupt(env, &priority) >= 0;
+    return rx_select_interrupt(env, &priority, &fast) >= 0;
 }
 
 void rx_set_irq_pending(CPUState *env, uint32_t vector, bool pending)
@@ -113,6 +132,18 @@ void rx_set_irq_priority(CPUState *env, uint32_t vector, uint32_t priority)
 void rx_set_nmi_pending(CPUState *env, bool pending)
 {
     env->nmi_pending = pending;
+    rx_refresh_interrupt_request(env);
+}
+
+void rx_set_fast_interrupt_vector(CPUState *env, uint32_t vector, bool enabled)
+{
+    if(enabled && vector >= RX_INTERRUPT_VECTORS) {
+        tlib_abortf("RX: fast interrupt vector %u is out of range", vector);
+        return;
+    }
+
+    env->fast_irq_enabled = enabled;
+    env->fast_irq_vector = enabled ? vector : 0;
     rx_refresh_interrupt_request(env);
 }
 
@@ -171,11 +202,32 @@ static void rx_enter_interrupt(CPUState *env, uint32_t id, uint32_t handler, uin
     env->wfi = 0;
 }
 
+/* Fast interrupt entry (RXv2 manual 5.5.7): PC and PSW go to BPC and BPSW,
+ * nothing is pushed on the stack, and the handler address comes from FINTV. */
+static void rx_enter_fast_interrupt(CPUState *env, uint32_t id, uint32_t handler, uint32_t new_psw)
+{
+    uint32_t old_psw = env->psw;
+    bool record = env->interrupt_depth < RX_INTERRUPT_STACK_SIZE;
+
+    if(record && env->interrupt_begin_callback_enabled) {
+        tlib_on_interrupt_begin(id);
+    }
+
+    env->bpsw = old_psw;
+    env->bpc = env->pc;
+    env->psw = new_psw;
+    rx_push_interrupt_record(env, id);
+    env->pc = handler;
+    env->exception_index = -1;
+    env->wfi = 0;
+}
+
 int process_interrupt(int interrupt_request, CPUState *env)
 {
     uint32_t handler;
     uint32_t new_psw;
     uint32_t priority;
+    bool fast;
     int vector;
 
     if(!(interrupt_request & CPU_INTERRUPT_HARD) || tlib_is_in_debug_mode()) {
@@ -193,11 +245,21 @@ int process_interrupt(int interrupt_request, CPUState *env)
         return 1;
     }
 
-    vector = rx_select_interrupt(env, &priority);
+    vector = rx_select_interrupt(env, &priority, &fast);
     if(vector < 0) {
         /* Masked for now. CPU_INTERRUPT_HARD stays asserted so the request is
          * reconsidered after PSW changes. */
         return 0;
+    }
+
+    env->irq_pending[vector] = 0;
+
+    if(fast) {
+        new_psw = (env->psw & ~(PSW_I | PSW_U | PSW_PM | PSW_IPL_MASK)) |
+                  (priority << PSW_IPL_SHIFT);
+        rx_enter_fast_interrupt(env, (uint32_t)vector, env->fintv, new_psw);
+        rx_refresh_interrupt_request(env);
+        return 1;
     }
 
     if(env->intb == 0) {
@@ -209,7 +271,6 @@ int process_interrupt(int interrupt_request, CPUState *env)
     new_psw = (env->psw & ~(PSW_I | PSW_U | PSW_PM | PSW_IPL_MASK)) |
               (priority << PSW_IPL_SHIFT);
 
-    env->irq_pending[vector] = 0;
     rx_enter_interrupt(env, (uint32_t)vector, handler, new_psw);
     rx_refresh_interrupt_request(env);
     return 1;
@@ -240,6 +301,8 @@ void rx_reset_state(CPUState *env)
     memset(env->irq_pending, 0, sizeof(env->irq_pending));
     memset(env->irq_priority, 0, sizeof(env->irq_priority));
     env->nmi_pending = false;
+    env->fast_irq_enabled = false;
+    env->fast_irq_vector = 0;
     memset(env->interrupt_stack, 0, sizeof(env->interrupt_stack));
     env->interrupt_depth = 0;
     clear_interrupt_pending(env, CPU_INTERRUPT_HARD);
