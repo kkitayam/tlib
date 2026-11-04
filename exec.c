@@ -892,8 +892,9 @@ void tb_invalidate_phys_page_range_inner(tb_page_addr_t start, tb_page_addr_t en
             tb_phys_invalidate(tb, -1);
             if(env) {
                 env->current_tb = saved_tb;
-                if(env->interrupt_request && env->current_tb) {
-                    cpu_interrupt(env, env->interrupt_request);
+                uint32_t interrupt_request = __atomic_load_n(&env->interrupt_request, __ATOMIC_SEQ_CST);
+                if(interrupt_request && env->current_tb) {
+                    cpu_interrupt(env, interrupt_request);
                 }
             }
         }

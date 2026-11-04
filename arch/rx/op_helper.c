@@ -86,6 +86,20 @@ static inline uint32_t rx_ldl(CPUState *env, uint32_t addr)
     return ldl_kernel_inner(addr, rx_helper_retaddr);
 }
 
+static uint32_t rx_software_interrupt(CPUState *env, uint32_t vector, uint32_t return_pc, uint32_t id)
+{
+    uint32_t old_psw = env->psw;
+    uint32_t handler;
+
+    stl_kernel_inner(env->isp - 4, old_psw, rx_helper_retaddr);
+    stl_kernel_inner(env->isp - 8, return_pc, rx_helper_retaddr);
+    handler = ldl_kernel_inner(env->intb + vector * 4, rx_helper_retaddr);
+    env->isp -= 8;
+    env->psw = old_psw & ~(PSW_I | PSW_U | PSW_PM);
+    rx_interrupt_begin(env, id);
+    return handler;
+}
+
 static inline void rx_stb(CPUState *env, uint32_t addr, uint8_t value)
 {
     if(cpu_mmu_index(env) == MMU_USER_IDX) {
@@ -952,19 +966,10 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
 
     switch(b0) {
         case 0x00: { /* BRK */
-            uint32_t old_psw;
             if(!ex) {
                 break;
             }
-            if(env->intb == 0) {
-                result = -1;
-                goto done;
-            }
-            old_psw = env->psw;
-            env->psw = old_psw & ~(PSW_I | PSW_U | PSW_PM);
-            rx_push(env, ex, old_psw);
-            rx_push(env, ex, pc + 1);
-            SET_JUMP(rx_ldl(env, env->intb));
+            SET_JUMP(rx_software_interrupt(env, 0, pc + 1, RX_HOOK_BRK));
             break;
         }
 
@@ -1306,19 +1311,10 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
 
             if(b0 == 0x75 && opsel == 0x6) { /* INT #imm8 */
                 uint32_t vector = rx_next8(&r);
-                uint32_t old_psw;
                 if(!ex) {
                     break;
                 }
-                if(env->intb == 0) {
-                    result = -1;
-                    goto done;
-                }
-                old_psw = env->psw;
-                env->psw = old_psw & ~(PSW_I | PSW_U | PSW_PM);
-                rx_push(env, ex, old_psw);
-                rx_push(env, ex, pc + r.off);
-                SET_JUMP(rx_ldl(env, env->intb + vector * 4));
+                SET_JUMP(rx_software_interrupt(env, vector, pc + r.off, RX_HOOK_INT_BASE + vector));
                 break;
             }
 

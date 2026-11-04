@@ -298,7 +298,7 @@ int cpu_exec(CPUState *env)
 
 #ifdef TARGET_PROTO_ARM_M
     if(env->v7m.locked_up &&
-       (!(env->interrupt_request & CPU_INTERRUPT_HARD) || tlib_nvic_find_pending_irq() != ARMV7M_EXCP_NMI)) {
+       (!(is_interrupt_pending(env, CPU_INTERRUPT_HARD)) || tlib_nvic_find_pending_irq() != ARMV7M_EXCP_NMI)) {
         /* Armv8-M ARM rules RMBTM and RHTVD: fetch, execution, and ITSTATE
          * advancement stop while the PE is in Lockup. */
         return EXCP_LOCKUP;
@@ -352,7 +352,7 @@ int cpu_exec(CPUState *env)
             for(;;) {
                 cpu_sync_instructions_count(env);
 
-                interrupt_request = env->interrupt_request;
+                interrupt_request = __atomic_load_n(&env->interrupt_request, __ATOMIC_SEQ_CST);
                 if(unlikely(interrupt_request)) {
                     if(is_interrupt_pending(env, CPU_INTERRUPT_DEBUG)) {
                         clear_interrupt_pending(env, CPU_INTERRUPT_DEBUG);
