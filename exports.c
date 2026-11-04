@@ -548,7 +548,7 @@ EXC_VOID_2(tlib_set_irq, int32_t, interrupt, int32_t, state)
 
 int32_t tlib_is_irq_set()
 {
-    return cpu->interrupt_request;
+    return __atomic_load_n(&cpu->interrupt_request, __ATOMIC_SEQ_CST);
 }
 
 EXC_INT_0(int32_t, tlib_is_irq_set)

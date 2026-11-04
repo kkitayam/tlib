@@ -30,21 +30,30 @@ void tlib_rx_set_acc1(uint64_t value)
 
 EXC_VOID_1(tlib_rx_set_acc1, uint64_t, value)
 
-/* External interrupt inputs. The platform supplies the vector table through
- * INTB; the priority of a vector is programmed separately, as in the RX ICU. */
-void tlib_rx_set_interrupt_pending(uint32_t vector, uint32_t pending)
+void tlib_rx_set_interrupt(uint32_t vector, uint32_t level, uint32_t fast, uint64_t generation)
 {
-    rx_set_irq_pending(cpu, vector, pending != 0);
+    if(vector >= RX_INTERRUPT_VECTORS || level == 0 || level > 15 || fast > 1) {
+        tlib_abortf("RX: invalid interrupt candidate: vector=%u level=%u fast=%u", vector, level, fast);
+        return;
+    }
+    rx_set_interrupt(cpu, vector, level, fast != 0, generation);
 }
 
-EXC_VOID_2(tlib_rx_set_interrupt_pending, uint32_t, vector, uint32_t, pending)
+EXC_VOID_4(tlib_rx_set_interrupt, uint32_t, vector, uint32_t, level, uint32_t, fast, uint64_t, generation)
 
-void tlib_rx_set_interrupt_priority(uint32_t vector, uint32_t priority)
+void tlib_rx_set_interrupt_acknowledge_callback(rx_acknowledge_callback_t callback)
 {
-    rx_set_irq_priority(cpu, vector, priority);
+    tlib_rx_set_acknowledge_callback(callback);
 }
 
-EXC_VOID_2(tlib_rx_set_interrupt_priority, uint32_t, vector, uint32_t, priority)
+EXC_VOID_1(tlib_rx_set_interrupt_acknowledge_callback, rx_acknowledge_callback_t, callback)
+
+void tlib_rx_clear_interrupt(void)
+{
+    rx_clear_interrupt(cpu);
+}
+
+EXC_VOID_0(tlib_rx_clear_interrupt)
 
 void tlib_rx_set_nmi_pending(uint32_t pending)
 {
@@ -52,15 +61,6 @@ void tlib_rx_set_nmi_pending(uint32_t pending)
 }
 
 EXC_VOID_1(tlib_rx_set_nmi_pending, uint32_t, pending)
-
-/* Selects the ICU fast-interrupt source (FIR.FVCT/FIEN). The handler address
- * itself is programmed by guest software through FINTV. */
-void tlib_rx_set_fast_interrupt_vector(uint32_t vector, uint32_t enabled)
-{
-    rx_set_fast_interrupt_vector(cpu, vector, enabled != 0);
-}
-
-EXC_VOID_2(tlib_rx_set_fast_interrupt_vector, uint32_t, vector, uint32_t, enabled)
 
 void tlib_set_single_step(uint32_t enabled)
 {

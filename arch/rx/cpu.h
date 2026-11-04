@@ -2,6 +2,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <pthread.h>
+#include <stddef.h>
 
 #include "cpu_registers.h"
 
@@ -34,9 +36,11 @@
 #define PSW_IPL_MASK 0x0F000000
 #define PSW_IPL_SHIFT 24
 
-/* External interrupt sources. The platform owns the vector table; the CPU only
- * tracks request and priority state. */
 #define RX_INTERRUPT_VECTORS     256
+#define RX_IRQ_VALID             (1u << 12)
+#define RX_IRQ_FAST              (1u << 13)
+#define RX_IRQ_NMI               (1u << 14)
+#define RX_IRQ_CANDIDATE_MASK    (RX_IRQ_NMI - 1)
 /* Exception vectors live at EXTB + a fixed offset (RXv2 manual 1.7.1). EXTB
  * resets to 0xFFFFFF80, so NMI starts at 0xFFFFFFF8. */
 #define RX_EXTB_RESET                    0xFFFFFF80u
@@ -45,6 +49,10 @@
 #define RX_NMI_VECTOR_OFFSET             0x78u
 #define RX_NMI_VECTOR_ADDRESS            (RX_EXTB_RESET + RX_NMI_VECTOR_OFFSET)
 #define RX_INTERRUPT_STACK_SIZE          32
+#define RX_HOOK_EXCEPTION_BASE           0x100u
+#define RX_HOOK_NMI                      0x200u
+#define RX_HOOK_INT_BASE                 0x300u
+#define RX_HOOK_BRK                      0x400u
 
 typedef struct CPUState {
     uint32_t regs[16];
@@ -68,17 +76,9 @@ typedef struct CPUState {
     /* MOVLI/MOVCO link flag */
     bool link_flag;
 
-    /* External interrupt requests and their priorities, indexed by vector. A
-     * priority of zero keeps a vector disabled. */
-    uint8_t irq_pending[RX_INTERRUPT_VECTORS];
-    uint8_t irq_priority[RX_INTERRUPT_VECTORS];
-    bool nmi_pending;
-
-    /* Fast interrupt designation (ICU FIR.FIEN/FVCT). The selected vector is
-     * delivered through FINTV with PSW/BPC saved in BPSW/BPC instead of on the
-     * stack, and always takes priority level 15. */
-    bool fast_irq_enabled;
-    uint32_t fast_irq_vector;
+    /* Candidate and notification flag are updated under interrupt_lock. */
+    uint32_t interrupt_inputs;
+    uint64_t interrupt_generation;
 
     /* Vectors of the exception frames currently on the stack. Used only to
      * pair the tlib interrupt begin/end callbacks, which RTE completes. */
@@ -99,7 +99,11 @@ typedef struct CPUState {
     bool singlestep_enabled;
 
     CPU_COMMON
+    pthread_mutex_t interrupt_lock;
 } CPUState;
+
+_Static_assert(offsetof(CPUState, interrupt_lock) > offsetof(CPUState, current_tb),
+               "RX interrupt mutex must not be included in serialized CPU state");
 
 static inline int cpu_mmu_index(CPUState *env)
 {
@@ -127,11 +131,11 @@ static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)
     env->pc = tb->pc;
 }
 
-void rx_set_irq_pending(CPUState *env, uint32_t vector, bool pending);
-void rx_set_irq_priority(CPUState *env, uint32_t vector, uint32_t priority);
+void rx_set_interrupt(CPUState *env, uint32_t vector, uint32_t level, bool fast, uint64_t generation);
+void rx_clear_interrupt(CPUState *env);
 void rx_set_nmi_pending(CPUState *env, bool pending);
-void rx_set_fast_interrupt_vector(CPUState *env, uint32_t vector, bool enabled);
 bool rx_has_work(CPUState *env);
+void rx_interrupt_begin(CPUState *env, uint32_t id);
 void rx_interrupt_return(CPUState *env);
 
 static inline bool cpu_has_work(CPUState *env)
