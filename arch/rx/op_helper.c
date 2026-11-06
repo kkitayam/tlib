@@ -96,6 +96,10 @@ static uint32_t rx_software_interrupt(CPUState *env, uint32_t vector, uint32_t r
     handler = ldl_kernel_inner(env->intb + vector * 4, rx_helper_retaddr);
     env->isp -= 8;
     env->psw = old_psw & ~(PSW_I | PSW_U | PSW_PM);
+    env->pc = handler;
+    env->exception_index = -1;
+    env->wfi = 0;
+    /* The begin hook observes the completed entry state (PC, PSW, ISP). */
     rx_interrupt_begin(env, id);
     return handler;
 }
