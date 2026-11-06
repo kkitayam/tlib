@@ -123,10 +123,11 @@ static void rx_enter_interrupt(CPUState *env, uint32_t id, uint32_t handler, uin
     stl_phys(env->isp - 8, env->pc);
     env->isp -= 8;
     env->psw = new_psw;
-    rx_interrupt_begin(env, id);
     env->pc = handler;
     env->exception_index = -1;
     env->wfi = 0;
+    /* The begin hook observes the completed entry state (PC, PSW, ISP). */
+    rx_interrupt_begin(env, id);
 }
 
 /* Fast interrupt entry (RXv2 manual 5.5.7): PC and PSW go to BPC and BPSW,
@@ -134,7 +135,6 @@ static void rx_enter_interrupt(CPUState *env, uint32_t id, uint32_t handler, uin
 static void rx_enter_fast_interrupt(CPUState *env, uint32_t id, uint32_t handler, uint32_t new_psw)
 {
     uint32_t old_psw = env->psw;
-    rx_interrupt_begin(env, id);
 
     env->bpsw = old_psw;
     env->bpc = env->pc;
@@ -142,6 +142,8 @@ static void rx_enter_fast_interrupt(CPUState *env, uint32_t id, uint32_t handler
     env->pc = handler;
     env->exception_index = -1;
     env->wfi = 0;
+    /* The begin hook observes the completed entry state (BPC, BPSW, PC). */
+    rx_interrupt_begin(env, id);
 }
 
 int process_interrupt(int interrupt_request, CPUState *env)
@@ -160,7 +162,9 @@ int process_interrupt(int interrupt_request, CPUState *env)
     }
 
     /* NMI ignores PSW.I and PSW.IPL and always uses the fixed reset vector.
-     * The manual sets PSW.IPL to 15 on NMI entry. */
+     * The manual sets PSW.IPL to 15 on NMI entry. NMI is consumed under the
+     * same lock as the candidate snapshot so a maskable request cannot be
+     * mistaken for it. */
     pthread_mutex_lock(&env->interrupt_lock);
     inputs = env->interrupt_inputs;
     generation = env->interrupt_generation;
@@ -168,9 +172,7 @@ int process_interrupt(int interrupt_request, CPUState *env)
     if(nmi) {
         env->interrupt_inputs &= ~RX_IRQ_NMI;
         rx_refresh_interrupt_request(env);
-    }
-    pthread_mutex_unlock(&env->interrupt_lock);
-    if(nmi) {
+        pthread_mutex_unlock(&env->interrupt_lock);
         handler = ldl_phys(env->extb + RX_NMI_VECTOR_OFFSET);
         new_psw = (env->psw & ~(PSW_I | PSW_U | PSW_PM | PSW_IPL_MASK)) | PSW_IPL_MASK;
         rx_enter_interrupt(env, RX_HOOK_NMI, handler, new_psw);
@@ -181,11 +183,24 @@ int process_interrupt(int interrupt_request, CPUState *env)
     if(vector < 0) {
         /* Masked for now. CPU_INTERRUPT_HARD stays asserted so the request is
          * reconsidered after PSW changes. */
+        pthread_mutex_unlock(&env->interrupt_lock);
         return 0;
     }
     if(!rx_require_acknowledge_callback()) {
+        pthread_mutex_unlock(&env->interrupt_lock);
         return 0;
     }
+
+    /* Select and consume the candidate in one critical section. ICU updates
+     * take the same lock, so a request published after the snapshot cannot be
+     * mistaken for the one being accepted. If the ICU withdraws the request
+     * after this point, the interrupt is still accepted; the generation sent
+     * with the acknowledgement lets the ICU detect that case. */
+    if(env->interrupt_generation == generation) {
+        env->interrupt_inputs &= ~RX_IRQ_CANDIDATE_MASK;
+        rx_refresh_interrupt_request(env);
+    }
+    pthread_mutex_unlock(&env->interrupt_lock);
 
     if(fast) {
         new_psw = (env->psw & ~(PSW_I | PSW_U | PSW_PM | PSW_IPL_MASK)) |
