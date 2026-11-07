@@ -1,10 +1,8 @@
 /*
  * Renesas RX instruction interpreter.
  *
- * The translator emits one call per instruction. The helper decodes the
- * instruction from guest memory and applies its architectural effects. The
- * same decoder is used in a side-effect-free mode during translation to
- * determine the instruction length and control flow.
+ * The translator uses this decoder for instructions not yet translated to
+ * TCG, and in a side-effect-free mode to determine their length.
  */
 
 #include <math.h>

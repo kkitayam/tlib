@@ -106,7 +106,11 @@ EXC_VOID_1(tlib_rx_set_nmi_pending, uint32_t, pending)
 
 void tlib_set_single_step(uint32_t enabled)
 {
-    cpu->singlestep_enabled = enabled;
+    bool new_value = enabled != 0;
+    if(cpu->singlestep_enabled != new_value) {
+        cpu->singlestep_enabled = new_value;
+        tb_flush(cpu);
+    }
 }
 
 EXC_VOID_1(tlib_set_single_step, uint32_t, enabled)
