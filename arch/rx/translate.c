@@ -124,6 +124,90 @@ static void gen_alu(int op, int reg, TCGv src)
     tcg_temp_free(dst);
 }
 
+static void gen_shift_imm(int kind, int count, int src_reg, int dst_reg)
+{
+    TCGv src = tcg_temp_new();
+    TCGv result = tcg_temp_new();
+    TCGv flags = tcg_temp_new();
+    gen_read_reg(src, src_reg);
+
+    if(count == 0) {
+        tcg_gen_movi_tl(flags, 0);
+    } else {
+        tcg_gen_shri_tl(flags, src, kind == 2 ? 32 - count : count - 1);
+        tcg_gen_andi_tl(flags, flags, PSW_CARRY);
+    }
+
+    if(kind == 0) {
+        tcg_gen_shri_tl(result, src, count);
+    } else if(kind == 1) {
+        tcg_gen_sari_tl(result, src, count);
+    } else {
+        tcg_gen_shli_tl(result, src, count);
+        TCGv restored = tcg_temp_new();
+        tcg_gen_sari_tl(restored, result, count);
+        tcg_gen_setcond_tl(TCG_COND_NE, restored, restored, src);
+        tcg_gen_shli_tl(restored, restored, 3);
+        tcg_gen_or_tl(flags, flags, restored);
+        tcg_temp_free(restored);
+    }
+    tcg_gen_andi_tl(cpu_psw, cpu_psw, ~(PSW_CARRY | (kind == 0 ? 0 : PSW_OVERFLOW)));
+    tcg_gen_or_tl(cpu_psw, cpu_psw, flags);
+    gen_sz_flags(result);
+    gen_write_reg(dst_reg, result);
+    tcg_temp_free(flags);
+    tcg_temp_free(result);
+    tcg_temp_free(src);
+}
+
+static void gen_bit_imm(int op, int bit, int reg)
+{
+    TCGv value = tcg_temp_new();
+    uint32_t mask = 1u << bit;
+    gen_read_reg(value, reg);
+    if(op == 0) {
+        tcg_gen_ori_tl(value, value, mask);
+        gen_write_reg(reg, value);
+    } else if(op == 1) {
+        tcg_gen_andi_tl(value, value, ~mask);
+        gen_write_reg(reg, value);
+    } else {
+        TCGv zero = tcg_temp_new();
+        tcg_gen_andi_tl(value, value, mask);
+        tcg_gen_setcondi_tl(TCG_COND_EQ, zero, value, 0);
+        tcg_gen_setcondi_tl(TCG_COND_NE, value, value, 0);
+        tcg_gen_shli_tl(zero, zero, 1);
+        tcg_gen_or_tl(value, value, zero);
+        tcg_gen_andi_tl(cpu_psw, cpu_psw, ~(PSW_CARRY | PSW_ZERO));
+        tcg_gen_or_tl(cpu_psw, cpu_psw, value);
+        tcg_temp_free(zero);
+    }
+    tcg_temp_free(value);
+}
+
+static void gen_reg_logic(int op, int src_reg, int dst_reg)
+{
+    TCGv src = tcg_temp_new();
+    TCGv result = tcg_temp_new();
+    gen_read_reg(src, src_reg);
+    if(op == 0x3b) {
+        tcg_gen_not_tl(result, src);
+    } else {
+        gen_read_reg(result, dst_reg);
+        if(op == 0x33) {
+            tcg_gen_and_tl(result, result, src);
+        } else {
+            tcg_gen_xor_tl(result, result, src);
+        }
+    }
+    gen_sz_flags(result);
+    if(op != 0x33) {
+        gen_write_reg(dst_reg, result);
+    }
+    tcg_temp_free(result);
+    tcg_temp_free(src);
+}
+
 static int gen_rx_insn(uint32_t pc)
 {
     uint8_t opcode = ldub_code(pc);
@@ -141,6 +225,25 @@ static int gen_rx_insn(uint32_t pc)
         tcg_temp_free(src);
         return 2;
     }
+    if(opcode >= 0x68 && opcode <= 0x6d) {
+        uint8_t operands = ldub_code(pc + 1);
+        int count = ((opcode & 1) << 4) | (operands >> 4);
+        gen_shift_imm((opcode - 0x68) / 2, count, operands & 15, operands & 15);
+        return 2;
+    }
+    if(opcode >= 0x78 && opcode <= 0x7d) {
+        uint8_t operands = ldub_code(pc + 1);
+        int bit = ((opcode & 1) << 4) | (operands >> 4);
+        gen_bit_imm((opcode - 0x78) / 2, bit, operands & 15);
+        return 2;
+    }
+    if(opcode == 0x7e) {
+        uint8_t operands = ldub_code(pc + 1);
+        if((operands & 0xf0) == 0) {
+            gen_reg_logic(0x3b, operands & 15, operands & 15);
+            return 2;
+        }
+    }
     if(opcode >= 0x43 && opcode <= 0x57 && (opcode & 3) == 3) {
         uint8_t operands = ldub_code(pc + 1);
         TCGv src = tcg_temp_new();
@@ -156,6 +259,35 @@ static int gen_rx_insn(uint32_t pc)
         gen_write_reg(operands & 15, src);
         tcg_temp_free(src);
         return 2;
+    }
+    if(opcode == 0xfc) {
+        uint8_t operation = ldub_code(pc + 1);
+        if(operation == 0x33 || operation == 0x37 || operation == 0x3b) {
+            uint8_t operands = ldub_code(pc + 2);
+            gen_reg_logic(operation, operands >> 4, operands & 15);
+            return 3;
+        }
+        if(operation == 0x43) {
+            uint8_t operands = ldub_code(pc + 2);
+            int src_reg = operands >> 4, dst_reg = operands & 15;
+            TCGv src = tcg_temp_new(), dst = tcg_temp_new();
+            gen_read_reg(src, src_reg);
+            gen_read_reg(dst, dst_reg);
+            gen_write_reg(dst_reg, src);
+            gen_write_reg(src_reg, dst);
+            tcg_temp_free(dst);
+            tcg_temp_free(src);
+            return 3;
+        }
+    }
+    if(opcode == 0xfd) {
+        uint8_t operation = ldub_code(pc + 1);
+        if(operation >= 0x80 && operation <= 0xdf) {
+            uint8_t operands = ldub_code(pc + 2);
+            int count = ((operation >> 4) & 1) * 16 + (operation & 15);
+            gen_shift_imm((operation - 0x80) / 0x20, count, operands >> 4, operands & 15);
+            return 3;
+        }
     }
     return 0;
 }
