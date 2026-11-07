@@ -14,27 +14,31 @@
 
 #include "softmmu_exec.h"
 
+static __thread void *rx_helper_retaddr;
+
 typedef struct {
     CPUState *env;
     uint32_t pc;
     uint32_t off;
+    bool executing;
 } RXReader;
 
 static uint8_t rx_next8(RXReader *r)
 {
-    return ldub_code(r->pc + r->off++);
+    uint32_t address = r->pc + r->off++;
+    return r->executing ? ldub_code_inner(address, rx_helper_retaddr) : ldub_code(address);
 }
 
 static uint16_t rx_next16(RXReader *r)
 {
-    uint16_t v = lduw_code(r->pc + r->off);
+    uint16_t v = r->executing ? lduw_code_inner(r->pc + r->off, rx_helper_retaddr) : lduw_code(r->pc + r->off);
     r->off += 2;
     return v;
 }
 
 static uint32_t rx_next32(RXReader *r)
 {
-    uint32_t v = ldl_code(r->pc + r->off);
+    uint32_t v = r->executing ? ldl_code_inner(r->pc + r->off, rx_helper_retaddr) : ldl_code(r->pc + r->off);
     r->off += 4;
     return v;
 }
@@ -53,13 +57,11 @@ static void rx_set_r(CPUState *env, int n, uint32_t value)
     }
 }
 
-/* Data accesses performed inside helper code need the return address of the
+/* Accesses performed inside helper code need the return address of the
  * generated block: the softmmu slow path stores it in the TLB entry so that a
  * fault can be retried. GETPC() inside a helper sub-function would return an
  * address outside the TCG buffer, so the helper entry point captures it once
  * and the accessors below use the explicit-retaddr variants. */
-static __thread void *rx_helper_retaddr;
-
 static inline uint8_t rx_ldub(CPUState *env, uint32_t addr)
 {
     if(cpu_mmu_index(env) == MMU_USER_IDX) {
@@ -863,7 +865,7 @@ static void rx_raise_privileged(CPUState *env)
  */
 static int rx_execute(CPUState *env, uint32_t pc, int ex)
 {
-    RXReader r = { env, pc, 0 };
+    RXReader r = { env, pc, 0, ex != 0 };
     uint8_t b0 = rx_next8(&r);
     uint32_t jump = 0;
     int has_jump = 0;
@@ -2280,7 +2282,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
             switch(b1) {
                 case 0x60: case 0x61: case 0x62: { /* SHLR/SHAR/SHLL Rs, Rd */
                     uint8_t b2 = rx_next8(&r);
-                    rx_do_shift(env, ex, b1 - 0x60, (int)GETR((b2 >> 4) & 0xf), b2 & 0xf, b2 & 0xf);
+                    rx_do_shift(env, ex, b1 - 0x60, (int)(GETR((b2 >> 4) & 0xf) & 31), b2 & 0xf, b2 & 0xf);
                     break;
                 }
                 case 0x64: { /* ROTR Rs, Rd */
