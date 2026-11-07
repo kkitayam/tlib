@@ -30,6 +30,48 @@ void tlib_rx_set_acc1(uint64_t value)
 
 EXC_VOID_1(tlib_rx_set_acc1, uint64_t, value)
 
+uint32_t tlib_rx_get_acc0_high(void)
+{
+    return rx_get_acc0_high(cpu);
+}
+
+EXC_INT_0(uint32_t, tlib_rx_get_acc0_high)
+
+uint32_t tlib_rx_get_acc1_high(void)
+{
+    return rx_get_acc1_high(cpu);
+}
+
+EXC_INT_0(uint32_t, tlib_rx_get_acc1_high)
+
+void tlib_rx_set_acc0_high(uint32_t value)
+{
+    rx_set_acc0_high(cpu, value);
+}
+
+EXC_VOID_1(tlib_rx_set_acc0_high, uint32_t, value)
+
+void tlib_rx_set_acc1_high(uint32_t value)
+{
+    rx_set_acc1_high(cpu, value);
+}
+
+EXC_VOID_1(tlib_rx_set_acc1_high, uint32_t, value)
+
+uint32_t tlib_rx_get_extb(void)
+{
+    return rx_get_extb(cpu);
+}
+
+EXC_INT_0(uint32_t, tlib_rx_get_extb)
+
+void tlib_rx_set_extb(uint32_t value)
+{
+    rx_set_extb(cpu, value);
+}
+
+EXC_VOID_1(tlib_rx_set_extb, uint32_t, value)
+
 void tlib_rx_set_interrupt(uint32_t vector, uint32_t level, uint32_t fast, uint64_t generation)
 {
     if(vector >= RX_INTERRUPT_VECTORS || level == 0 || level > 15 || fast > 1) {

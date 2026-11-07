@@ -7,6 +7,14 @@ uint64_t tlib_rx_get_acc0(void);
 uint64_t tlib_rx_get_acc1(void);
 void tlib_rx_set_acc0(uint64_t value);
 void tlib_rx_set_acc1(uint64_t value);
+/* Upper 8 bits (bits 64..71) of the 72-bit accumulators. */
+uint32_t tlib_rx_get_acc0_high(void);
+uint32_t tlib_rx_get_acc1_high(void);
+void tlib_rx_set_acc0_high(uint32_t value);
+void tlib_rx_set_acc1_high(uint32_t value);
+/* Exception vector base register (control register CR 0xD). */
+uint32_t tlib_rx_get_extb(void);
+void tlib_rx_set_extb(uint32_t value);
 
 /* The ICU publishes its highest candidate. generation identifies the source
  * request, not the publication: a withdrawn and reasserted source needs a
