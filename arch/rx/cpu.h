@@ -67,8 +67,9 @@ typedef struct CPUState {
     uint32_t fintv;
     uint32_t fpsw;
 
-    /* Signed 72-bit accumulators. Only the low 64 bits are exposed through the
-     * generic register interface; see tlib_rx_get_acc0/1. */
+    /* Signed 72-bit accumulators. The low 64 bits are exposed through
+     * tlib_rx_get_acc0/1, and the upper 8 bits through
+     * tlib_rx_get_acc0_high/1 and the ACC0_HIGH/ACC1_HIGH registers. */
     __int128 acc0;
     __int128 acc1;
 
@@ -162,3 +163,9 @@ uint64_t rx_get_acc0(CPUState *env);
 uint64_t rx_get_acc1(CPUState *env);
 void rx_set_acc0(CPUState *env, uint64_t value);
 void rx_set_acc1(CPUState *env, uint64_t value);
+uint32_t rx_get_acc0_high(CPUState *env);
+uint32_t rx_get_acc1_high(CPUState *env);
+void rx_set_acc0_high(CPUState *env, uint32_t value);
+void rx_set_acc1_high(CPUState *env, uint32_t value);
+uint32_t rx_get_extb(CPUState *env);
+void rx_set_extb(CPUState *env, uint32_t value);
