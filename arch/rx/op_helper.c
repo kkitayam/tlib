@@ -936,7 +936,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
         uint32_t addr = GETR(base_reg) + (uint32_t)(n * size);
 
         if(load) {
-            rx_disp_store(&r, ex, 3, reg, size, rx_read_mem(env, ex, addr, size, !movu), 0);
+            rx_disp_store(&r, ex, 3, reg, size, rx_read_mem(env, ex, addr, size, !movu), !movu);
         } else {
             rx_write_mem(env, ex, addr, size, rx_disp_load(&r, ex, 3, reg, size, 1));
         }
