@@ -534,7 +534,7 @@ static int gen_mov(DisasContextBase *base, uint8_t opcode)
         tcg_gen_movi_tl(cpu_pc, pc);
         gen_address(address, base_reg, displacement * size);
         if(load) {
-            gen_load_mem(value, address, size, false, base->mem_idx);
+            gen_load_mem(value, address, size, !movu, base->mem_idx);
             gen_write_reg(reg, value);
         } else {
             gen_read_reg(value, reg);
