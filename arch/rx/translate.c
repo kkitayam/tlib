@@ -833,6 +833,37 @@ static void gen_division(int reg, TCGv src, bool is_signed)
     tcg_temp_free(dst);
 }
 
+static void gen_extended_result(int operation, int reg, TCGv src)
+{
+    TCGv dst = tcg_temp_new(), result = tcg_temp_new();
+    gen_read_reg(dst, reg);
+    if(operation == 4 || operation == 5) {
+        tcg_gen_movcond_tl(operation == 4 ? TCG_COND_GT : TCG_COND_LT, result, dst, src, dst, src);
+        gen_write_reg(reg, result);
+    } else if(operation == 6 || operation == 7) {
+        TCGv high = tcg_temp_new();
+        if(operation == 6) tcg_gen_muls2_tl(result, high, dst, src);
+        else tcg_gen_mulu2_tl(result, high, dst, src);
+        gen_write_reg(reg, result);
+        gen_write_reg((reg + 1) & 15, high);
+        tcg_temp_free(high);
+    } else if(operation == 14 || operation == 15) {
+        TCGv condition = tcg_temp_new(), zero = tcg_const_tl(0);
+        gen_condition(condition, operation == 14 ? 0 : 1);
+        tcg_gen_movcond_tl(TCG_COND_NE, result, condition, zero, src, dst);
+        gen_write_reg(reg, result);
+        tcg_temp_free(zero);
+        tcg_temp_free(condition);
+    } else {
+        if(operation == 12 || operation == 16) tcg_gen_and_tl(result, dst, src);
+        else tcg_gen_xor_tl(result, dst, src);
+        gen_sz_flags(result);
+        if(operation != 12) gen_write_reg(reg, result);
+    }
+    tcg_temp_free(result);
+    tcg_temp_free(dst);
+}
+
 static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
 {
     uint32_t pc = base->pc;
@@ -840,23 +871,28 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
     TCGv src;
     if(opcode == 0xfc) {
         uint8_t op = ldub_code(pc + 1);
-        if(op != 0x03 && op != 0x0b && op != 0x23 && op != 0x27) return 0;
+        if(op != 0x03 && op != 0x0b && op != 0x1b && op != 0x1f && op != 0x23 && op != 0x27) return 0;
         uint8_t operands = ldub_code(pc + 2);
-        operation = op == 0x03 ? 0 : op == 0x0b ? 2 : op == 0x23 ? 8 : 9;
+        operation = op == 0x03 ? 0 : op == 0x0b ? 2 : op == 0x1b ? 6 : op == 0x1f ? 7 : op == 0x23 ? 8 : 9;
         reg = operands & 15;
         src = tcg_temp_new();
         gen_read_reg(src, operands >> 4);
         length = 3;
     } else if(opcode == 0x06) {
         uint8_t b1 = ldub_code(pc + 1);
-        if(((b1 >> 4) & 3) != 2) return 0;
-        operation = ldub_code(pc + 2);
-        if(operation != 0 && operation != 2 && operation != 8 && operation != 9) return 0;
-        uint8_t operands = ldub_code(pc + 3);
+        int group = (b1 >> 4) & 3;
+        if(group == 1 && ((b1 >> 2) & 3) == 0) operation = 16;
+        else if(group == 2) {
+            operation = ldub_code(pc + 2);
+            if(operation != 0 && operation != 2 && (operation < 4 || operation > 9) &&
+               operation != 12 && operation != 13) return 0;
+        } else return 0;
+        int operand_offset = group == 2 ? 3 : 2;
+        uint8_t operands = ldub_code(pc + operand_offset);
         int mx = b1 >> 6, ss = b1 & 3, size = mx == 2 ? 4 : mx == 0 ? 1 : 2;
         bool sign = mx != 3;
         reg = operands & 15;
-        length = 4;
+        length = operand_offset + 1;
         uint32_t displacement = read_disp(pc + length, ss, size);
         length += ss == 1 ? 1 : ss == 2 ? 2 : 0;
         src = tcg_temp_new();
@@ -877,7 +913,8 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
         if((b1 & 0xf3) != 0x70) return 0;
         uint8_t operands = ldub_code(pc + 2);
         operation = operands >> 4;
-        if(operation != 2 && operation != 8 && operation != 9) return 0;
+        if(operation != 2 && (operation < 4 || operation > 9) &&
+           operation != 12 && operation != 13 && operation != 14 && operation != 15) return 0;
         reg = operands & 15;
         length = 3;
         uint32_t immediate = read_immediate(pc + length, (b1 >> 2) & 3, &length, true);
@@ -887,8 +924,10 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
     }
     if(operation == 0 || operation == 2) {
         gen_carry_alu(reg, src, operation == 0);
-    } else {
+    } else if(operation == 8 || operation == 9) {
         gen_division(reg, src, operation == 8);
+    } else {
+        gen_extended_result(operation, reg, src);
     }
     tcg_temp_free(src);
     return length;
@@ -1076,7 +1115,40 @@ static int gen_indirect_branch(DisasContextBase *base, uint8_t opcode)
     uint32_t pc = base->pc;
     int reg = -1, kind = -1, length = 0;
     int32_t displacement = 0;
-    if(opcode == 0x02) {
+    if(opcode == 0x67 || opcode == 0x3f) {
+        int first = 0, last = -1;
+        uint32_t adjustment;
+        if(opcode == 0x3f) {
+            uint8_t operands = ldub_code(pc + 1);
+            first = operands >> 4;
+            last = operands & 15;
+            if(first == 0) return 0;
+            adjustment = ldub_code(pc + 2) * 4 - (last - first + 1) * 4;
+            length = 3;
+        } else {
+            adjustment = ldub_code(pc + 1) * 4;
+            length = 2;
+        }
+        TCGv stack = tcg_temp_new(), value = tcg_temp_new();
+        tcg_gen_movi_tl(cpu_pc, pc);
+        gen_read_reg(stack, 0);
+        tcg_gen_addi_tl(stack, stack, adjustment);
+        gen_write_reg(0, stack);
+        for(int i = first; i <= last; i++) {
+            gen_load_mem(value, stack, 4, false, base->mem_idx);
+            tcg_gen_addi_tl(stack, stack, 4);
+            gen_write_reg(0, stack);
+            gen_write_reg(i, value);
+        }
+        gen_load_mem(value, stack, 4, false, base->mem_idx);
+        tcg_gen_addi_tl(stack, stack, 4);
+        gen_write_reg(0, stack);
+        tcg_gen_mov_tl(cpu_pc, value);
+        tcg_temp_free(value);
+        tcg_temp_free(stack);
+        base->is_jmp = DISAS_JUMP;
+        return length;
+    } else if(opcode == 0x02) {
         kind = 0; /* RTS */
         length = 1;
     } else if(opcode == 0x05 || opcode == 0x39) {
