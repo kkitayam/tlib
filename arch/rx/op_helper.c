@@ -390,6 +390,16 @@ static uint32_t rx_float_to_bits(float value)
     return cvt.u;
 }
 
+target_ulong helper_rx_itof(target_ulong value)
+{
+    return rx_float_to_bits((float)(int32_t)value);
+}
+
+target_ulong helper_rx_utof(target_ulong value)
+{
+    return rx_float_to_bits((float)(uint32_t)value);
+}
+
 static void rx_set_fpsw_flags(CPUState *env, int ex, int z, int s)
 {
     uint32_t fpsw;
