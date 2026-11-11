@@ -867,7 +867,7 @@ static void gen_extended_result(int operation, int reg, TCGv src)
 static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
 {
     uint32_t pc = base->pc;
-    int operation, reg, length;
+    int operation = 0, alu_op = -1, reg, length;
     TCGv src;
     if(opcode == 0xfc) {
         uint8_t op = ldub_code(pc + 1);
@@ -881,7 +881,9 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
     } else if(opcode == 0x06) {
         uint8_t b1 = ldub_code(pc + 1);
         int group = (b1 >> 4) & 3;
-        if(group == 1 && ((b1 >> 2) & 3) == 0) operation = 16;
+        if(group == 0) alu_op = (b1 >> 2) & 3;
+        else if(group == 1 && ((b1 >> 2) & 3) == 0) operation = 16;
+        else if(group == 1 && ((b1 >> 2) & 3) == 1) alu_op = 5;
         else if(group == 2) {
             operation = ldub_code(pc + 2);
             if(operation != 0 && operation != 2 && (operation < 4 || operation > 9) &&
@@ -922,7 +924,9 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
     } else {
         return 0;
     }
-    if(operation == 0 || operation == 2) {
+    if(alu_op >= 0) {
+        gen_alu(alu_op, reg, src);
+    } else if(operation == 0 || operation == 2) {
         gen_carry_alu(reg, src, operation == 0);
     } else if(operation == 8 || operation == 9) {
         gen_division(reg, src, operation == 8);
