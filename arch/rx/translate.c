@@ -235,6 +235,29 @@ static void gen_rotate(int reg, TCGv count, bool left)
     tcg_temp_free(src);
 }
 
+static void gen_rotate_carry(int reg, bool left)
+{
+    TCGv value = tcg_temp_new(), carry = tcg_temp_new(), old_carry = tcg_temp_new();
+    gen_read_reg(value, reg);
+    tcg_gen_andi_tl(old_carry, cpu_psw, PSW_CARRY);
+    if(left) {
+        tcg_gen_shri_tl(carry, value, 31);
+        tcg_gen_shli_tl(value, value, 1);
+    } else {
+        tcg_gen_andi_tl(carry, value, 1);
+        tcg_gen_shri_tl(value, value, 1);
+        tcg_gen_shli_tl(old_carry, old_carry, 31);
+    }
+    tcg_gen_or_tl(value, value, old_carry);
+    tcg_gen_andi_tl(cpu_psw, cpu_psw, ~PSW_CARRY);
+    tcg_gen_or_tl(cpu_psw, cpu_psw, carry);
+    gen_sz_flags(value);
+    gen_write_reg(reg, value);
+    tcg_temp_free(old_carry);
+    tcg_temp_free(carry);
+    tcg_temp_free(value);
+}
+
 static void gen_unary(int op, int reg)
 {
     TCGv src = tcg_temp_new(), result = tcg_temp_new(), zero = tcg_const_tl(0);
@@ -637,6 +660,20 @@ static int gen_imm_alu(uint32_t pc, uint8_t opcode)
 
 static int gen_mov_imm(DisasContextBase *base, uint8_t opcode)
 {
+    if(opcode >= 0x3c && opcode <= 0x3e) {
+        uint32_t pc = base->pc;
+        uint8_t operands = ldub_code(pc + 1);
+        int size = 1 << (opcode - 0x3c);
+        uint32_t displacement = (((operands >> 3) & 16) | (operands & 15)) * size;
+        TCGv address = tcg_temp_new(), value = tcg_const_tl(ldub_code(pc + 2));
+        tcg_gen_movi_tl(cpu_pc, pc);
+        gen_address(address, (operands >> 4) & 7, displacement);
+        gen_store_mem(value, address, size, base->mem_idx);
+        ((DisasContext *)base)->stop_after_instruction = true;
+        tcg_temp_free(value);
+        tcg_temp_free(address);
+        return 3;
+    }
     if(opcode < 0xf8 || opcode > 0xfb) {
         return 0;
     }
@@ -864,6 +901,15 @@ static void gen_extended_result(int operation, int reg, TCGv src)
     tcg_temp_free(dst);
 }
 
+static void gen_int_float(int reg, TCGv src, bool is_unsigned)
+{
+    TCGv result = tcg_temp_new();
+    if(is_unsigned) gen_helper_rx_utof(result, src);
+    else gen_helper_rx_itof(result, src);
+    gen_write_reg(reg, result);
+    tcg_temp_free(result);
+}
+
 static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
 {
     uint32_t pc = base->pc;
@@ -887,7 +933,7 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
         else if(group == 2) {
             operation = ldub_code(pc + 2);
             if(operation != 0 && operation != 2 && (operation < 4 || operation > 9) &&
-               operation != 12 && operation != 13) return 0;
+               operation != 12 && operation != 13 && operation != 17 && operation != 21) return 0;
         } else return 0;
         int operand_offset = group == 2 ? 3 : 2;
         uint8_t operands = ldub_code(pc + operand_offset);
@@ -926,6 +972,8 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
     }
     if(alu_op >= 0) {
         gen_alu(alu_op, reg, src);
+    } else if(opcode == 0x06 && (operation == 17 || operation == 21)) {
+        gen_int_float(reg, src, operation == 21);
     } else if(operation == 0 || operation == 2) {
         gen_carry_alu(reg, src, operation == 0);
     } else if(operation == 8 || operation == 9) {
@@ -935,6 +983,253 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
     }
     tcg_temp_free(src);
     return length;
+}
+
+static int gen_special_data(DisasContextBase *base, uint8_t opcode)
+{
+    uint32_t pc = base->pc;
+    if(opcode == 0x7e) {
+        uint8_t operands = ldub_code(pc + 1);
+        int op = operands >> 4;
+        if(op == 4 || op == 5) {
+            gen_rotate_carry(operands & 15, op == 5);
+            return 2;
+        }
+        return 0;
+    }
+    if(opcode == 0x06) {
+        uint8_t b1 = ldub_code(pc + 1);
+        if(((b1 >> 4) & 3) != 2 || ldub_code(pc + 2) != 0x10) return 0;
+        uint8_t operands = ldub_code(pc + 3);
+        int mx = b1 >> 6, ss = b1 & 3, size = mx == 2 ? 4 : mx == 0 ? 1 : 2;
+        int length = 4;
+        uint32_t displacement = read_disp(pc + length, ss, size);
+        length += ss == 1 ? 1 : ss == 2 ? 2 : 0;
+        TCGv value = tcg_temp_new(), dst = tcg_temp_new(), address = tcg_temp_new();
+        gen_read_reg(dst, operands & 15);
+        if(ss == 3) {
+            gen_read_reg(value, operands >> 4);
+            if(size == 1) tcg_gen_ext8s_tl(value, value);
+            else if(size == 2 && mx == 3) tcg_gen_ext16u_tl(value, value);
+            else if(size == 2) tcg_gen_ext16s_tl(value, value);
+            gen_write_reg(operands >> 4, dst);
+        } else {
+            tcg_gen_movi_tl(cpu_pc, pc);
+            gen_address(address, operands >> 4, displacement);
+            gen_load_mem(value, address, size, mx != 3, base->mem_idx);
+            gen_store_mem(dst, address, size, base->mem_idx);
+            ((DisasContext *)base)->stop_after_instruction = true;
+        }
+        gen_write_reg(operands & 15, value);
+        tcg_temp_free(address);
+        tcg_temp_free(dst);
+        tcg_temp_free(value);
+        return length;
+    }
+    if(opcode != 0xfc) return 0;
+    uint8_t b1 = ldub_code(pc + 1), operands = ldub_code(pc + 2);
+    if((b1 & 0xfc) == 0x40 && (b1 & 3) != 3) {
+        int ss = b1 & 3, length = 3;
+        uint32_t displacement = read_disp(pc + length, ss, 1);
+        length += ss == 1 ? 1 : ss == 2 ? 2 : 0;
+        TCGv value = tcg_temp_new(), dst = tcg_temp_new(), address = tcg_temp_new();
+        tcg_gen_movi_tl(cpu_pc, pc);
+        gen_address(address, operands >> 4, displacement);
+        gen_load_mem(value, address, 1, false, base->mem_idx);
+        gen_read_reg(dst, operands & 15);
+        gen_store_mem(dst, address, 1, base->mem_idx);
+        gen_write_reg(operands & 15, value);
+        ((DisasContext *)base)->stop_after_instruction = true;
+        tcg_temp_free(address);
+        tcg_temp_free(dst);
+        tcg_temp_free(value);
+        return length;
+    }
+    if((b1 & 0xf0) == 0xd0 && ((b1 >> 2) & 3) != 3) {
+        int sd = b1 & 3, size = 1 << ((b1 >> 2) & 3), length = 3;
+        uint32_t displacement = read_disp(pc + length, sd, size);
+        length += sd == 1 ? 1 : sd == 2 ? 2 : 0;
+        TCGv value = tcg_temp_new();
+        gen_condition(value, operands & 15);
+        if(sd == 3) {
+            gen_write_reg(operands >> 4, value);
+        } else {
+            TCGv address = tcg_temp_new();
+            tcg_gen_movi_tl(cpu_pc, pc);
+            gen_address(address, operands >> 4, displacement);
+            gen_store_mem(value, address, size, base->mem_idx);
+            ((DisasContext *)base)->stop_after_instruction = true;
+            tcg_temp_free(address);
+        }
+        tcg_temp_free(value);
+        return length;
+    }
+    if((b1 == 0x5a || b1 == 0x5e) && ((DisasContext *)base)->is_v3) {
+        uint16_t field = ldub_code(pc + 3) | (ldub_code(pc + 4) << 8);
+        int slsb = field & 31, dlsb = (field >> 5) & 31;
+        int width = ((field >> 10) & 31) - dlsb;
+        if(width <= 0) width += 32;
+        uint32_t mask = width == 32 ? UINT32_MAX : (1u << width) - 1;
+        uint32_t destination_mask = mask << dlsb;
+        TCGv value = tcg_temp_new(), dst = tcg_temp_new();
+        gen_read_reg(value, operands >> 4);
+        tcg_gen_shri_tl(value, value, slsb);
+        tcg_gen_andi_tl(value, value, mask);
+        tcg_gen_shli_tl(value, value, dlsb);
+        tcg_gen_andi_tl(value, value, destination_mask);
+        if(b1 == 0x5e) {
+            gen_read_reg(dst, operands & 15);
+            tcg_gen_andi_tl(dst, dst, ~destination_mask);
+            tcg_gen_or_tl(value, value, dst);
+        }
+        gen_write_reg(operands & 15, value);
+        tcg_temp_free(dst);
+        tcg_temp_free(value);
+        return 5;
+    }
+    if((b1 & 0xfc) == 0x44 || (b1 & 0xfc) == 0x54) {
+        int ss = b1 & 3, length = 3;
+        uint32_t displacement = read_disp(pc + length, ss, 1);
+        length += ss == 1 ? 1 : ss == 2 ? 2 : 0;
+        TCGv src = tcg_temp_new();
+        if(ss == 3) gen_read_reg(src, operands >> 4);
+        else {
+            TCGv address = tcg_temp_new();
+            tcg_gen_movi_tl(cpu_pc, pc);
+            gen_address(address, operands >> 4, displacement);
+            gen_load_mem(src, address, 1, false, base->mem_idx);
+            tcg_temp_free(address);
+        }
+        gen_int_float(operands & 15, src, (b1 & 0xfc) == 0x54);
+        tcg_temp_free(src);
+        return length;
+    }
+    return 0;
+}
+
+static int control_offset(int cr)
+{
+    switch(cr) {
+        case 3: return offsetof(CPUState, fpsw);
+        case 4: return offsetof(CPUState, cpen);
+        case 8: return offsetof(CPUState, bpsw);
+        case 9: return offsetof(CPUState, bpc);
+        case 11: return offsetof(CPUState, fintv);
+        case 12: return offsetof(CPUState, intb);
+        case 13: return offsetof(CPUState, extb);
+        default: return -1;
+    }
+}
+
+static bool control_valid(int cr)
+{
+    return cr == 0 || cr == 1 || cr == 2 || cr == 10 || control_offset(cr) >= 0;
+}
+
+static void gen_read_control(TCGv value, int cr, uint32_t pc)
+{
+    switch(cr) {
+        case 0: tcg_gen_mov_tl(value, cpu_psw); break;
+        case 1: tcg_gen_movi_tl(value, pc); break;
+        case 2: tcg_gen_mov_tl(value, cpu_usp); break;
+        case 10: tcg_gen_mov_tl(value, cpu_isp); break;
+        default: tcg_gen_ld_tl(value, cpu_env, control_offset(cr)); break;
+    }
+}
+
+static void gen_write_control(DisasContextBase *base, int cr, TCGv value)
+{
+    switch(cr) {
+        case 0: {
+            TCGv pm = tcg_temp_new(), sanitized = tcg_temp_new(), user_value = tcg_temp_new();
+            TCGv zero = tcg_const_tl(0);
+            tcg_gen_andi_tl(pm, cpu_psw, PSW_PM);
+            tcg_gen_andi_tl(sanitized, value, ~PSW_PM);
+            tcg_gen_andi_tl(user_value, sanitized, ~(PSW_I | PSW_U | PSW_IPL_MASK));
+            tcg_gen_or_tl(user_value, user_value, pm);
+            tcg_gen_movcond_tl(TCG_COND_NE, cpu_psw, pm, zero, user_value, sanitized);
+            tcg_temp_free(zero);
+            tcg_temp_free(user_value);
+            tcg_temp_free(sanitized);
+            tcg_temp_free(pm);
+            ((DisasContext *)base)->stop_after_instruction = true;
+            break;
+        }
+        case 1: break;
+        case 2: tcg_gen_mov_tl(cpu_usp, value); break;
+        case 10: tcg_gen_mov_tl(cpu_isp, value); break;
+        default: tcg_gen_st_tl(value, cpu_env, control_offset(cr)); break;
+    }
+}
+
+static int gen_control(DisasContextBase *base, uint8_t opcode)
+{
+    uint32_t pc = base->pc;
+    if(opcode == 0x7f) {
+        uint8_t b1 = ldub_code(pc + 1);
+        if((b1 & 0xe0) != 0xa0) return 0;
+        static const int flag_map[16] = { 0, 1, 2, 3, 0, 0, 0, 0, 16, 17, 0, 0, 0, 0, 0, 0 };
+        uint32_t bit = 1u << flag_map[b1 & 15];
+        if(b1 & 0x10) tcg_gen_andi_tl(cpu_psw, cpu_psw, ~bit);
+        else tcg_gen_ori_tl(cpu_psw, cpu_psw, bit);
+        if(bit & (PSW_I | PSW_U)) ((DisasContext *)base)->stop_after_instruction = true;
+        return 2;
+    }
+    if(opcode == 0x7e) {
+        uint8_t b1 = ldub_code(pc + 1);
+        int op = b1 >> 4, cr = b1 & 15;
+        if(op < 12 || !control_valid(cr)) return 0;
+        bool push = op < 14;
+        TCGv stack = tcg_temp_new(), value = tcg_temp_new();
+        tcg_gen_movi_tl(cpu_pc, pc);
+        if(push) gen_read_control(value, cr, pc);
+        gen_read_reg(stack, 0);
+        if(push) {
+            tcg_gen_subi_tl(stack, stack, 4);
+            gen_write_reg(0, stack);
+            gen_store_mem(value, stack, 4, base->mem_idx);
+            ((DisasContext *)base)->stop_after_instruction = true;
+        } else {
+            gen_load_mem(value, stack, 4, false, base->mem_idx);
+            tcg_gen_addi_tl(stack, stack, 4);
+            gen_write_reg(0, stack);
+            gen_write_control(base, cr, value);
+        }
+        tcg_temp_free(value);
+        tcg_temp_free(stack);
+        return 2;
+    }
+    if(opcode == 0xfd) {
+        uint8_t b1 = ldub_code(pc + 1);
+        if(b1 >= 0x68 && b1 <= 0x6b) {
+            uint8_t operands = ldub_code(pc + 2);
+            bool read = (b1 & 2) != 0;
+            int cr = read ? operands >> 4 : operands & 15;
+            int reg = read ? operands & 15 : operands >> 4;
+            if(!control_valid(cr)) return 0;
+            TCGv value = tcg_temp_new();
+            if(read) {
+                gen_read_control(value, cr, pc);
+                gen_write_reg(reg, value);
+            } else {
+                gen_read_reg(value, reg);
+                gen_write_control(base, cr, value);
+            }
+            tcg_temp_free(value);
+            return 3;
+        }
+        if((b1 & 0xf3) == 0x73) {
+            uint8_t operands = ldub_code(pc + 2);
+            int cr = operands & 15, length = 3;
+            if(!control_valid(cr)) return 0;
+            uint32_t immediate = read_immediate(pc + length, (b1 >> 2) & 3, &length, true);
+            TCGv value = tcg_const_tl(immediate);
+            gen_write_control(base, cr, value);
+            tcg_temp_free(value);
+            return length;
+        }
+    }
+    return 0;
 }
 
 static int gen_stack(DisasContextBase *base, uint8_t opcode)
@@ -1250,6 +1545,14 @@ static int gen_rx_insn(DisasContextBase *base)
     if(imm_length != 0) {
         return imm_length;
     }
+    int special_length = gen_special_data(base, opcode);
+    if(special_length != 0) {
+        return special_length;
+    }
+    int control_length = gen_control(base, opcode);
+    if(control_length != 0) {
+        return control_length;
+    }
     int bit_length = gen_memory_bit(base, opcode);
     if(bit_length != 0) {
         return bit_length;
@@ -1424,6 +1727,7 @@ void gen_sync_pc(DisasContext *dc)
 void setup_disas_context(DisasContextBase *base, CPUState *env)
 {
     base->mem_idx = cpu_mmu_index(env);
+    ((DisasContext *)base)->is_v3 = env->is_v3;
 }
 
 int gen_intermediate_code(CPUState *env, DisasContextBase *base)
