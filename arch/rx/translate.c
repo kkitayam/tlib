@@ -722,7 +722,7 @@ static int gen_memory_bit(DisasContextBase *base, uint8_t opcode)
     if(opcode >= 0xf0 && opcode <= 0xf7) {
         uint8_t operands = ldub_code(pc + 1);
         sd = opcode & 3;
-        if(sd == 3 || (opcode == 0xf4 && (operands & 15) >= 8 && (operands & 15) <= 10)) {
+        if(sd == 3 || (opcode >= 0xf4 && (operands & 15) >= 8 && (operands & 15) <= 10)) {
             return 0;
         }
         reg = operands >> 4;
@@ -1235,7 +1235,8 @@ static int gen_control(DisasContextBase *base, uint8_t opcode)
 static int gen_stack(DisasContextBase *base, uint8_t opcode)
 {
     uint32_t pc = base->pc;
-    int first, last, size = 4;
+    int first, last, size = 4, length = 2;
+    uint32_t displacement = 0;
     bool push, memory = false;
     if(opcode == 0x6e || opcode == 0x6f) {
         uint8_t operands = ldub_code(pc + 1);
@@ -1250,12 +1251,14 @@ static int gen_stack(DisasContextBase *base, uint8_t opcode)
         first = last = operands & 15;
         push = op != 11;
         if(push) size = 1 << (op - 8);
-    } else if(opcode == 0xf4) {
+    } else if(opcode >= 0xf4 && opcode <= 0xf6) {
         uint8_t operands = ldub_code(pc + 1);
         int op = operands & 15;
         if(op < 8 || op > 10) return 0;
         first = last = operands >> 4;
         size = 1 << (op - 8);
+        displacement = read_disp(pc + length, opcode & 3, size);
+        length += opcode & 3;
         push = true;
         memory = true;
     } else {
@@ -1264,16 +1267,18 @@ static int gen_stack(DisasContextBase *base, uint8_t opcode)
     TCGv stack = tcg_temp_new(), value = tcg_temp_new();
     tcg_gen_movi_tl(cpu_pc, pc);
     if(memory) {
-        gen_read_reg(stack, first);
+        gen_address(stack, first, displacement);
         gen_load_mem(value, stack, size, false, base->mem_idx);
     }
     for(int reg = push ? last : first; push ? reg >= first : reg <= last; reg += push ? -1 : 1) {
         if(push && !memory) gen_read_reg(value, reg);
         gen_read_reg(stack, 0);
         if(push) {
-            tcg_gen_subi_tl(stack, stack, size);
+            if(size == 1) tcg_gen_andi_tl(value, value, 0xff);
+            else if(size == 2) tcg_gen_andi_tl(value, value, 0xffff);
+            tcg_gen_subi_tl(stack, stack, 4);
             gen_write_reg(0, stack);
-            gen_store_mem(value, stack, size, base->mem_idx);
+            gen_store_mem(value, stack, 4, base->mem_idx);
         } else {
             gen_load_mem(value, stack, 4, false, base->mem_idx);
             tcg_gen_addi_tl(stack, stack, 4);
@@ -1284,7 +1289,7 @@ static int gen_stack(DisasContextBase *base, uint8_t opcode)
     if(push) ((DisasContext *)base)->stop_after_instruction = true;
     tcg_temp_free(value);
     tcg_temp_free(stack);
-    return 2;
+    return length;
 }
 
 static int gen_alu_source(DisasContextBase *base, uint8_t opcode)
