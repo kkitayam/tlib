@@ -452,9 +452,9 @@ static void rx_push_sized(CPUState *env, int ex, uint32_t value, int size)
     if(!ex) {
         return;
     }
-    sp = rx_get_active_sp(env) - (uint32_t)size;
+    sp = rx_get_active_sp(env) - 4;
     rx_set_active_sp(env, sp);
-    rx_write_mem(env, ex, sp, size, value);
+    rx_stl(env, sp, value & rx_b2_mask[size]);
 }
 
 static uint32_t rx_pop(CPUState *env, int ex)
@@ -1596,10 +1596,11 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
             int rdst = (b1 >> 4) & 0xf;
             int sd = b0 & 3;
 
-            if(b0 == 0xf4 && (b1 & 0xf) >= 0x8 && (b1 & 0xf) <= 0xa) {
+            if(sd != 3 && (b1 & 0xf) >= 0x8 && (b1 & 0xf) <= 0xa) {
                 int psize = 1 << ((b1 & 0xf) - 8);
                 int base_reg = (b1 >> 4) & 0xf;
-                rx_push_sized(env, ex, rx_read_mem(env, ex, GETR(base_reg), psize, 0), psize);
+                uint32_t address = rx_disp_address(&r, sd, base_reg, psize);
+                rx_push_sized(env, ex, rx_read_mem(env, ex, address, psize, 0), psize);
                 break;
             }
 
@@ -2144,10 +2145,19 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 break;
             }
 
-            if(b1 == 0x72) { /* FCMP #imm32, Rn */
+            if(b1 == 0x72) { /* Floating-point operation #imm32, Rn */
                 uint8_t b2 = rx_next8(&r);
                 uint32_t imm = rx_next32(&r);
-                rx_do_fcmp(env, ex, GETR(b2 & 0xf), imm);
+                int rd = b2 & 0xf;
+                uint32_t dst = GETR(rd);
+                switch(b2 >> 4) {
+                    case 0: SETR(rd, rx_float_to_bits(rx_bits_to_float(dst) - rx_bits_to_float(imm))); break;
+                    case 1: rx_do_fcmp(env, ex, dst, imm); break;
+                    case 2: SETR(rd, rx_float_to_bits(rx_bits_to_float(dst) + rx_bits_to_float(imm))); break;
+                    case 3: SETR(rd, rx_float_to_bits(rx_bits_to_float(dst) * rx_bits_to_float(imm))); break;
+                    case 4: SETR(rd, rx_float_to_bits(rx_bits_to_float(dst) / rx_bits_to_float(imm))); break;
+                    default: result = -1; goto done;
+                }
                 break;
             }
 
