@@ -258,10 +258,10 @@ static void gen_rotate_carry(int reg, bool left)
     tcg_temp_free(value);
 }
 
-static void gen_unary(int op, int reg)
+static void gen_unary(int op, int src_reg, int dst_reg)
 {
     TCGv src = tcg_temp_new(), result = tcg_temp_new(), zero = tcg_const_tl(0);
-    gen_read_reg(src, reg);
+    gen_read_reg(src, src_reg);
     if(op == 1) {
         tcg_gen_neg_tl(result, src);
         gen_arithmetic_flags(zero, src, result, true);
@@ -287,7 +287,7 @@ static void gen_unary(int op, int reg)
         tcg_temp_free(overflow);
         tcg_temp_free(sign);
     }
-    gen_write_reg(reg, result);
+    gen_write_reg(dst_reg, result);
     tcg_temp_free(zero);
     tcg_temp_free(result);
     tcg_temp_free(src);
@@ -917,13 +917,38 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
     TCGv src;
     if(opcode == 0xfc) {
         uint8_t op = ldub_code(pc + 1);
-        if(op != 0x03 && op != 0x0b && op != 0x1b && op != 0x1f && op != 0x23 && op != 0x27) return 0;
-        uint8_t operands = ldub_code(pc + 2);
-        operation = op == 0x03 ? 0 : op == 0x0b ? 2 : op == 0x1b ? 6 : op == 0x1f ? 7 : op == 0x23 ? 8 : 9;
-        reg = operands & 15;
-        src = tcg_temp_new();
-        gen_read_reg(src, operands >> 4);
-        length = 3;
+        if(op == 0x07 || op == 0x0f) {
+            uint8_t operands = ldub_code(pc + 2);
+            gen_unary(op == 0x07 ? 1 : 2, operands >> 4, operands & 15);
+            return 3;
+        }
+        if(((op & 0xf8) == 0x30 && (op & 3) != 3) || (op & 0xf8) == 0x48) {
+            uint8_t operands = ldub_code(pc + 2);
+            int ss = op & 3;
+            operation = op < 0x38 ? op >> 2 : (op < 0x4c ? 14 : 15);
+            reg = operands & 15;
+            length = 3;
+            uint32_t displacement = read_disp(pc + length, ss, 1);
+            length += ss == 1 ? 1 : ss == 2 ? 2 : 0;
+            src = tcg_temp_new();
+            if(ss == 3) {
+                gen_read_reg(src, operands >> 4);
+            } else {
+                TCGv address = tcg_temp_new();
+                tcg_gen_movi_tl(cpu_pc, pc);
+                gen_address(address, operands >> 4, displacement);
+                gen_load_mem(src, address, 1, false, base->mem_idx);
+                tcg_temp_free(address);
+            }
+        } else {
+            if(op != 0x03 && op != 0x0b && op != 0x1b && op != 0x1f && op != 0x23 && op != 0x27) return 0;
+            uint8_t operands = ldub_code(pc + 2);
+            operation = op == 0x03 ? 0 : op == 0x0b ? 2 : op == 0x1b ? 6 : op == 0x1f ? 7 : op == 0x23 ? 8 : 9;
+            reg = operands & 15;
+            src = tcg_temp_new();
+            gen_read_reg(src, operands >> 4);
+            length = 3;
+        }
     } else if(opcode == 0x06) {
         uint8_t b1 = ldub_code(pc + 1);
         int group = (b1 >> 4) & 3;
@@ -1607,7 +1632,7 @@ static int gen_rx_insn(DisasContextBase *base)
             return 2;
         }
         if((operands >> 4) <= 3) {
-            gen_unary(operands >> 4, operands & 15);
+            gen_unary(operands >> 4, operands & 15, operands & 15);
             return 2;
         }
     }
