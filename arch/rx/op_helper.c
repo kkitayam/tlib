@@ -1596,7 +1596,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
             int rdst = (b1 >> 4) & 0xf;
             int sd = b0 & 3;
 
-            if(sd != 3 && (b1 & 0xf) >= 0x8 && (b1 & 0xf) <= 0xa) {
+            if(b0 >= 0xf4 && b0 <= 0xf6 && (b1 & 0xf) >= 0x8 && (b1 & 0xf) <= 0xa) {
                 int psize = 1 << ((b1 & 0xf) - 8);
                 int base_reg = (b1 >> 4) & 0xf;
                 uint32_t address = rx_disp_address(&r, sd, base_reg, psize);
