@@ -1543,6 +1543,27 @@ static int gen_rx_insn(DisasContextBase *base)
 {
     uint32_t pc = base->pc;
     uint8_t opcode = ldub_code(pc);
+    if(opcode == 0xfd) {
+        uint8_t op = ldub_code(pc + 1);
+        if(op <= 0x0f || op == 0x17 || op == 0x18 || op == 0x19 || op == 0x1e || op == 0x1f ||
+           (op >= 0x44 && op <= 0x4f && (op & 7) >= 4)) {
+            uint8_t operands = ldub_code(pc + 2);
+            int selector = (operands >> 4) & 7;
+            if(op != 0x17 || selector == 0 || selector == 1 || selector == 3) {
+                TCGv src1 = tcg_temp_new(), src2 = tcg_temp_new(), result = tcg_temp_new();
+                TCGv instruction = tcg_const_tl((op << 8) | operands);
+                gen_read_reg(src1, operands >> 4);
+                gen_read_reg(src2, operands & 15);
+                gen_helper_rx_dsp(result, cpu_env, instruction, src1, src2);
+                if(op == 0x1e || op == 0x1f) gen_write_reg(operands & 15, result);
+                tcg_temp_free(instruction);
+                tcg_temp_free(result);
+                tcg_temp_free(src2);
+                tcg_temp_free(src1);
+                return 3;
+            }
+        }
+    }
     int branch_length = gen_branch(base, opcode);
     if(branch_length != 0) {
         return branch_length;
