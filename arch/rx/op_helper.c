@@ -1798,7 +1798,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 int alu_op = b1 >> 2;
                 int alu_sd = b1 & 3;
                 if(alu_sd != 3 &&
-                   (alu_op == 12 || alu_op == 13 || (alu_op >= 17 && alu_op <= 19) || alu_op == 21)) {
+                   (alu_op == 12 || alu_op == 13 || alu_op == 17 || alu_op == 21)) {
                     int asrc = (b2 >> 4) & 0xf;
                     int adst = b2 & 0xf;
                     uint32_t address = rx_disp_address(&r, alu_sd, asrc, 1);
@@ -1817,16 +1817,6 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                         }
                         case 17:
                             SETR(adst, rx_float_to_bits((float)(int32_t)value));
-                            break;
-                        case 18:
-                            if(rx_condition_true(env, 0)) {
-                                SETR(adst, value);
-                            }
-                            break;
-                        case 19:
-                            if(rx_condition_true(env, 1)) {
-                                SETR(adst, value);
-                            }
                             break;
                         default:
                             SETR(adst, rx_float_to_bits((float)value));

@@ -922,7 +922,7 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
             gen_unary(op == 0x07 ? 1 : 2, operands >> 4, operands & 15);
             return 3;
         }
-        if(((op & 0xf8) == 0x30 && (op & 3) != 3) || (op & 0xf8) == 0x48) {
+        if(((op & 0xf8) == 0x30 && (op & 3) != 3) || op == 0x4b || op == 0x4f) {
             uint8_t operands = ldub_code(pc + 2);
             int ss = op & 3;
             operation = op < 0x38 ? op >> 2 : (op < 0x4c ? 14 : 15);
