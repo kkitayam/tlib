@@ -522,7 +522,9 @@ static int rx_set_control_register(CPUState *env, int cr, uint32_t value)
 
 static inline __int128 rx_sext72(__int128 value)
 {
-    return (value << 56) >> 56;
+    const unsigned __int128 mask = ((unsigned __int128)1 << 72) - 1;
+    unsigned __int128 bits = (unsigned __int128)value & mask;
+    return (__int128)bits - ((bits & ((unsigned __int128)1 << 71)) ? ((__int128)1 << 72) : 0);
 }
 
 static __int128 *rx_acc_ptr(CPUState *env, int select)
@@ -567,19 +569,20 @@ static uint32_t rx_dsp(CPUState *env, int ex, uint8_t op, uint8_t operand,
     } else if(op == 0x18 || op == 0x19) {
         select = (operand >> 7) & 1;
         int shift = (operand & 0x10) ? 2 : 1;
-        __int128 value = rx_sext72(rx_get_acc(env, select) << shift);
-        __int128 mask = (__int128)0xffffffff00000000LL;
+        __int128 value = rx_sext72(rx_get_acc(env, select) * (1 << shift));
+        __int128 mask = ~(((__int128)1 << 32) - 1);
         __int128 limit = op == 0x19 ? (__int128)0x007fffffff00000000LL : (__int128)0x00007fff00000000LL;
+        __int128 minimum = -limit - ((__int128)1 << 32);
         if(!(operand & 0x40)) value += (__int128)1 << 31;
         if(value > limit) value = limit;
-        else if(value < -limit - 1) value = -limit - 1;
+        else if(value < minimum) value = minimum;
         else value &= mask;
         rx_set_acc(env, ex, select, value);
     } else {
         select = (operand >> 7) & 1;
         int selector = (operand >> 4) & 3;
         int shift = op == 0x1e ? 2 : ((operand >> 6) & 1);
-        __int128 value = rx_sext72(rx_get_acc(env, select) << shift);
+        __int128 value = rx_sext72(rx_get_acc(env, select) * (1 << shift));
         switch(selector) {
             case 0: return (uint32_t)(value >> 32);
             case 1: return (uint32_t)value;
