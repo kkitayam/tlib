@@ -36,6 +36,12 @@
 #define PSW_IPL_MASK 0x0F000000
 #define PSW_IPL_SHIFT 24
 
+enum {
+    RX_DSP_SET,
+    RX_DSP_ADD,
+    RX_DSP_SUB,
+};
+
 #define RX_INTERRUPT_VECTORS     256
 #define RX_IRQ_VALID             (1u << 12)
 #define RX_IRQ_FAST              (1u << 13)
