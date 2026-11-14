@@ -561,7 +561,19 @@ static inline void rx_dsp_mul(CPUState *env, int mode, int form, int select,
 
 static inline void rx_dsp_mvtac(CPUState *env, int select, int selector, uint32_t src)
 {
-    rx_set_acc(env, select, (__int128)src << (selector == 0 ? 32 : selector == 3 ? 64 : 0));
+    __int128 value = rx_get_acc(env, select);
+    switch(selector) {
+        case 0: /* MVTACHI: bits 63-32, guard bits follow the sign of src */
+            value = (value & (__int128)0xffffffff) | ((__int128)(int32_t)src << 32);
+            break;
+        case 1: /* MVTACLO: bits 31-0 */
+            value = (value & ~(__int128)0xffffffff) | (__int128)src;
+            break;
+        default: /* MVTACGU: bits 71-64 in the 72-bit accumulator */
+            value = (value & (((__int128)1 << 64) - 1)) | ((__int128)(src & 0xff) << 64);
+            break;
+    }
+    rx_set_acc(env, select, value);
 }
 
 static inline void rx_dsp_rac(CPUState *env, int select, int shift, int wide, int round_down)
