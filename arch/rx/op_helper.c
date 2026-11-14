@@ -532,11 +532,9 @@ static __int128 *rx_acc_ptr(CPUState *env, int select)
     return select ? &env->acc1 : &env->acc0;
 }
 
-static void rx_set_acc(CPUState *env, int ex, int select, __int128 value)
+static void rx_set_acc(CPUState *env, int select, __int128 value)
 {
-    if(ex) {
-        *rx_acc_ptr(env, select) = rx_sext72(value);
-    }
+    *rx_acc_ptr(env, select) = rx_sext72(value);
 }
 
 static __int128 rx_get_acc(CPUState *env, int select)
@@ -544,59 +542,72 @@ static __int128 rx_get_acc(CPUState *env, int select)
     return *rx_acc_ptr(env, select);
 }
 
-static uint32_t rx_dsp(CPUState *env, int ex, uint8_t op, uint8_t operand,
-                       uint32_t src1, uint32_t src2)
+static inline void rx_dsp_mul(CPUState *env, int mode, int form, int select,
+                              uint32_t src1, uint32_t src2)
 {
-    int select = (op >> 3) & 1;
-    if(op <= 0x0f || (op >= 0x44 && op <= 0x4f)) {
-        int kind = op & 7;
-        int64_t lo1 = (int16_t)src1, lo2 = (int16_t)src2;
-        int64_t hi1 = (int16_t)(src1 >> 16), hi2 = (int16_t)(src2 >> 16);
-        __int128 product;
-        switch(kind & 3) {
-            case 0: product = (__int128)(hi1 * hi2) * 65536; break;
-            case 1: product = (__int128)(lo1 * lo2) * 65536; break;
-            case 2: product = (__int128)(lo1 * hi2) * 65536; break;
-            default: product = (__int128)(int32_t)src1 * (int32_t)src2; break;
-        }
-        if(op >= 0x44) product = rx_get_acc(env, select) - product;
-        else if(kind >= 4) product += rx_get_acc(env, select);
-        rx_set_acc(env, ex, select, product);
-    } else if(op == 0x17) {
-        select = (operand >> 7) & 1;
-        int selector = (operand >> 4) & 7;
-        rx_set_acc(env, ex, select, (__int128)src2 << (selector == 0 ? 32 : selector == 3 ? 64 : 0));
-    } else if(op == 0x18 || op == 0x19) {
-        select = (operand >> 7) & 1;
-        int shift = (operand & 0x10) ? 2 : 1;
-        __int128 value = rx_sext72(rx_get_acc(env, select) * (1 << shift));
-        __int128 mask = ~(((__int128)1 << 32) - 1);
-        __int128 limit = op == 0x19 ? (__int128)0x007fffffff00000000LL : (__int128)0x00007fff00000000LL;
-        __int128 minimum = -limit - ((__int128)1 << 32);
-        if(!(operand & 0x40)) value += (__int128)1 << 31;
-        if(value > limit) value = limit;
-        else if(value < minimum) value = minimum;
-        else value &= mask;
-        rx_set_acc(env, ex, select, value);
-    } else {
-        select = (operand >> 7) & 1;
-        int selector = (operand >> 4) & 3;
-        int shift = op == 0x1e ? 2 : ((operand >> 6) & 1);
-        __int128 value = rx_sext72(rx_get_acc(env, select) * (1 << shift));
-        switch(selector) {
-            case 0: return (uint32_t)(value >> 32);
-            case 1: return (uint32_t)value;
-            case 2: return (uint32_t)(value >> 16);
-            default: return (uint32_t)(value >> 64);
-        }
+    int64_t lo1 = (int16_t)src1, lo2 = (int16_t)src2;
+    int64_t hi1 = (int16_t)(src1 >> 16), hi2 = (int16_t)(src2 >> 16);
+    __int128 product;
+    switch(form) {
+        case 0: product = (__int128)(hi1 * hi2) * 65536; break;
+        case 1: product = (__int128)(lo1 * lo2) * 65536; break;
+        case 2: product = (__int128)(lo1 * hi2) * 65536; break;
+        default: product = (__int128)(int32_t)src1 * (int32_t)src2; break;
     }
-    return 0;
+    if(mode == RX_DSP_SUB) product = rx_get_acc(env, select) - product;
+    else if(mode == RX_DSP_ADD) product += rx_get_acc(env, select);
+    rx_set_acc(env, select, product);
 }
 
-target_ulong helper_rx_dsp(CPUState *env, target_ulong instruction,
-                           target_ulong src1, target_ulong src2)
+static inline void rx_dsp_mvtac(CPUState *env, int select, int selector, uint32_t src)
 {
-    return rx_dsp(env, 1, instruction >> 8, instruction, src1, src2);
+    rx_set_acc(env, select, (__int128)src << (selector == 0 ? 32 : selector == 3 ? 64 : 0));
+}
+
+static inline void rx_dsp_rac(CPUState *env, int select, int shift, int wide, int round_down)
+{
+    __int128 value = rx_sext72(rx_get_acc(env, select) * (1 << shift));
+    __int128 mask = ~(((__int128)1 << 32) - 1);
+    __int128 limit = wide ? (__int128)0x007fffffff00000000LL : (__int128)0x00007fff00000000LL;
+    __int128 minimum = -limit - ((__int128)1 << 32);
+    if(!round_down) value += (__int128)1 << 31;
+    if(value > limit) value = limit;
+    else if(value < minimum) value = minimum;
+    else value &= mask;
+    rx_set_acc(env, select, value);
+}
+
+static inline uint32_t rx_dsp_mvfac(CPUState *env, int select, int selector, int shift)
+{
+    __int128 value = rx_sext72(rx_get_acc(env, select) * (1 << shift));
+    switch(selector) {
+        case 0: return (uint32_t)(value >> 32);
+        case 1: return (uint32_t)value;
+        case 2: return (uint32_t)(value >> 16);
+        default: return (uint32_t)(value >> 64);
+    }
+}
+
+void helper_rx_dsp_mul(CPUState *env, target_ulong mode, target_ulong form, target_ulong select,
+                       target_ulong src1, target_ulong src2)
+{
+    rx_dsp_mul(env, mode, form, select, src1, src2);
+}
+
+void helper_rx_dsp_mvtac(CPUState *env, target_ulong select, target_ulong selector, target_ulong src)
+{
+    rx_dsp_mvtac(env, select, selector, src);
+}
+
+void helper_rx_dsp_rac(CPUState *env, target_ulong select, target_ulong shift, target_ulong wide,
+                       target_ulong round_down)
+{
+    rx_dsp_rac(env, select, shift, wide, round_down);
+}
+
+target_ulong helper_rx_dsp_mvfac(CPUState *env, target_ulong select, target_ulong selector, target_ulong shift)
+{
+    return rx_dsp_mvfac(env, select, selector, shift);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2014,8 +2025,20 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                     result = -1;
                     goto done;
                 }
-                uint32_t value = rx_dsp(env, ex, b1, b2, GETR(b2 >> 4), GETR(b2 & 15));
-                if(b1 == 0x1e || b1 == 0x1f) SETR(b2 & 15, value);
+                if(ex) {
+                    if(b1 <= 0x0f || b1 >= 0x44) {
+                        int mode = b1 >= 0x44 ? RX_DSP_SUB : (b1 & 4) ? RX_DSP_ADD : RX_DSP_SET;
+                        rx_dsp_mul(env, mode, b1 & 3, (b1 >> 3) & 1, GETR(b2 >> 4), GETR(b2 & 15));
+                    } else if(b1 == 0x17) {
+                        rx_dsp_mvtac(env, b2 >> 7, selector, GETR(b2 & 15));
+                    } else if(b1 == 0x18 || b1 == 0x19) {
+                        rx_dsp_rac(env, b2 >> 7, (b2 & 0x10) ? 2 : 1, b1 == 0x19, (b2 & 0x40) != 0);
+                    } else {
+                        uint32_t value = rx_dsp_mvfac(env, b2 >> 7, selector & 3,
+                                                     b1 == 0x1e ? 2 : (b2 >> 6) & 1);
+                        SETR(b2 & 15, value);
+                    }
+                }
                 break;
             }
 

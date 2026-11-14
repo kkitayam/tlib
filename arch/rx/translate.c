@@ -1550,16 +1550,42 @@ static int gen_rx_insn(DisasContextBase *base)
             uint8_t operands = ldub_code(pc + 2);
             int selector = (operands >> 4) & 7;
             if(op != 0x17 || selector == 0 || selector == 1 || selector == 3) {
-                TCGv src1 = tcg_temp_new(), src2 = tcg_temp_new(), result = tcg_temp_new();
-                TCGv instruction = tcg_const_tl((op << 8) | operands);
-                gen_read_reg(src1, operands >> 4);
-                gen_read_reg(src2, operands & 15);
-                gen_helper_rx_dsp(result, cpu_env, instruction, src1, src2);
-                if(op == 0x1e || op == 0x1f) gen_write_reg(operands & 15, result);
-                tcg_temp_free(instruction);
-                tcg_temp_free(result);
-                tcg_temp_free(src2);
-                tcg_temp_free(src1);
+                TCGv select = tcg_const_tl(op <= 0x0f || op >= 0x44 ? (op >> 3) & 1 : operands >> 7);
+                if(op <= 0x0f || op >= 0x44) {
+                    int mode = op >= 0x44 ? RX_DSP_SUB : (op & 4) ? RX_DSP_ADD : RX_DSP_SET;
+                    TCGv mode_arg = tcg_const_tl(mode), form = tcg_const_tl(op & 3);
+                    TCGv src1 = tcg_temp_new(), src2 = tcg_temp_new();
+                    gen_read_reg(src1, operands >> 4);
+                    gen_read_reg(src2, operands & 15);
+                    gen_helper_rx_dsp_mul(cpu_env, mode_arg, form, select, src1, src2);
+                    tcg_temp_free(src2);
+                    tcg_temp_free(src1);
+                    tcg_temp_free(form);
+                    tcg_temp_free(mode_arg);
+                } else if(op == 0x17) {
+                    TCGv field = tcg_const_tl(selector), src = tcg_temp_new();
+                    gen_read_reg(src, operands & 15);
+                    gen_helper_rx_dsp_mvtac(cpu_env, select, field, src);
+                    tcg_temp_free(src);
+                    tcg_temp_free(field);
+                } else if(op == 0x18 || op == 0x19) {
+                    TCGv shift = tcg_const_tl((operands & 0x10) ? 2 : 1);
+                    TCGv wide = tcg_const_tl(op == 0x19), down = tcg_const_tl((operands & 0x40) != 0);
+                    gen_helper_rx_dsp_rac(cpu_env, select, shift, wide, down);
+                    tcg_temp_free(down);
+                    tcg_temp_free(wide);
+                    tcg_temp_free(shift);
+                } else {
+                    TCGv field = tcg_const_tl(selector & 3);
+                    TCGv shift = tcg_const_tl(op == 0x1e ? 2 : (operands >> 6) & 1);
+                    TCGv result = tcg_temp_new();
+                    gen_helper_rx_dsp_mvfac(result, cpu_env, select, field, shift);
+                    gen_write_reg(operands & 15, result);
+                    tcg_temp_free(result);
+                    tcg_temp_free(shift);
+                    tcg_temp_free(field);
+                }
+                tcg_temp_free(select);
                 return 3;
             }
         }
