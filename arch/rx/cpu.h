@@ -37,6 +37,15 @@
 #define PSW_IPL_SHIFT 24
 
 enum {
+    RX_FPU_SUB,
+    RX_FPU_CMP,
+    RX_FPU_ADD,
+    RX_FPU_MUL,
+    RX_FPU_DIV,
+    RX_FPU_SQRT = 8,
+};
+
+enum {
     RX_DSP_SET,
     RX_DSP_ADD,
     RX_DSP_SUB,
