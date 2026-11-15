@@ -901,12 +901,16 @@ static void gen_extended_result(int operation, int reg, TCGv src)
     tcg_temp_free(dst);
 }
 
-static void gen_int_float(int reg, TCGv src, bool is_unsigned)
+static void gen_int_float(int reg, TCGv src, bool is_unsigned, uint32_t pc)
 {
     TCGv result = tcg_temp_new();
-    if(is_unsigned) gen_helper_rx_utof(result, src);
-    else gen_helper_rx_itof(result, src);
+    TCGv operation = tcg_const_tl(is_unsigned ? RX_FPU_UTOF : RX_FPU_ITOF);
+    TCGv zero = tcg_const_tl(0);
+    tcg_gen_movi_tl(cpu_pc, pc);
+    gen_helper_rx_fpu(result, cpu_env, operation, zero, src);
     gen_write_reg(reg, result);
+    tcg_temp_free(zero);
+    tcg_temp_free(operation);
     tcg_temp_free(result);
 }
 
@@ -998,7 +1002,7 @@ static int gen_extended_arithmetic(DisasContextBase *base, uint8_t opcode)
     if(alu_op >= 0) {
         gen_alu(alu_op, reg, src);
     } else if(opcode == 0x06 && (operation == 17 || operation == 21)) {
-        gen_int_float(reg, src, operation == 21);
+        gen_int_float(reg, src, operation == 21, pc);
     } else if(operation == 0 || operation == 2) {
         gen_carry_alu(reg, src, operation == 0);
     } else if(operation == 8 || operation == 9) {
@@ -1125,7 +1129,7 @@ static int gen_special_data(DisasContextBase *base, uint8_t opcode)
             gen_load_mem(src, address, 1, false, base->mem_idx);
             tcg_temp_free(address);
         }
-        gen_int_float(operands & 15, src, (b1 & 0xfc) == 0x54);
+        gen_int_float(operands & 15, src, (b1 & 0xfc) == 0x54, pc);
         tcg_temp_free(src);
         return length;
     }
@@ -1182,6 +1186,7 @@ static void gen_write_control(DisasContextBase *base, int cr, TCGv value)
         }
         case 1: break;
         case 2: tcg_gen_mov_tl(cpu_usp, value); break;
+        case 3: gen_helper_rx_write_fpsw(cpu_env, value); break;
         case 10: tcg_gen_mov_tl(cpu_isp, value); break;
         default: tcg_gen_st_tl(value, cpu_env, control_offset(cr)); break;
     }

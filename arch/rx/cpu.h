@@ -24,6 +24,7 @@
 
 #define EXCP_RX_ILLEGAL_INSTRUCTION     4
 #define EXCP_RX_PRIVILEGED_INSTRUCTION  5
+#define EXCP_RX_FLOATING_POINT          6
 
 /* PSW flags */
 #define PSW_CARRY    0x00000001
@@ -36,13 +37,24 @@
 #define PSW_IPL_MASK 0x0F000000
 #define PSW_IPL_SHIFT 24
 
+static inline uint32_t rx_fpsw_normalize(uint32_t fpsw)
+{
+    fpsw &= 0x7c007dffu;
+    return fpsw | ((fpsw & 0x3c000000u) ? 0x80000000u : 0);
+}
+
 enum {
     RX_FPU_SUB,
     RX_FPU_CMP,
     RX_FPU_ADD,
     RX_FPU_MUL,
     RX_FPU_DIV,
+    RX_FPU_FTOI,
+    RX_FPU_ROUND,
     RX_FPU_SQRT = 8,
+    RX_FPU_FTOU,
+    RX_FPU_ITOF,
+    RX_FPU_UTOF,
 };
 
 enum {
@@ -61,6 +73,7 @@ enum {
 #define RX_EXTB_RESET                    0xFFFFFF80u
 #define RX_EXCEPTION_PRIVILEGED_OFFSET   0x50u
 #define RX_EXCEPTION_UNDEFINED_OFFSET    0x5Cu
+#define RX_EXCEPTION_FLOAT_OFFSET        0x64u
 #define RX_NMI_VECTOR_OFFSET             0x78u
 #define RX_NMI_VECTOR_ADDRESS            (RX_EXTB_RESET + RX_NMI_VECTOR_OFFSET)
 #define RX_INTERRUPT_STACK_SIZE          32
