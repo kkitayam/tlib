@@ -390,6 +390,24 @@ static uint32_t rx_float_to_bits(float value)
     return cvt.u;
 }
 
+static uint32_t rx_fpu(int op, uint32_t dst, uint32_t src)
+{
+    switch(op) {
+        case RX_FPU_SUB: return rx_float_to_bits(rx_bits_to_float(dst) - rx_bits_to_float(src));
+        case RX_FPU_ADD: return rx_float_to_bits(rx_bits_to_float(dst) + rx_bits_to_float(src));
+        case RX_FPU_MUL: return rx_float_to_bits(rx_bits_to_float(dst) * rx_bits_to_float(src));
+        case RX_FPU_DIV: return rx_float_to_bits(rx_bits_to_float(dst) / rx_bits_to_float(src));
+        case RX_FPU_SQRT: return rx_float_to_bits(sqrtf(rx_bits_to_float(src)));
+        default: abort();
+    }
+}
+
+target_ulong helper_rx_fpu(CPUState *env, target_ulong op, target_ulong dst, target_ulong src)
+{
+    (void)env;
+    return rx_fpu(op, dst, src);
+}
+
 target_ulong helper_rx_itof(target_ulong value)
 {
     return rx_float_to_bits((float)(int32_t)value);
@@ -427,6 +445,11 @@ static void rx_do_fcmp(CPUState *env, int ex, uint32_t a, uint32_t b)
     if(unordered && ex) {
         env->fpsw |= 0x40u;
     }
+}
+
+void helper_rx_fcmp(CPUState *env, target_ulong dst, target_ulong src)
+{
+    rx_do_fcmp(env, 1, dst, src);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -1857,14 +1880,12 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 uint32_t fdst = GETR(fdst_reg);
 
                 switch(fop) {
-                    case 0x20: SETR(fdst_reg, rx_float_to_bits(rx_bits_to_float(fdst) - rx_bits_to_float(fsrc))); break;
+                    case 0x20: SETR(fdst_reg, rx_fpu(RX_FPU_SUB, fdst, fsrc)); break;
                     case 0x21: rx_do_fcmp(env, ex, fdst, fsrc); break;
-                    case 0x22: SETR(fdst_reg, rx_float_to_bits(rx_bits_to_float(fdst) + rx_bits_to_float(fsrc))); break;
-                    case 0x23: SETR(fdst_reg, rx_float_to_bits(rx_bits_to_float(fdst) * rx_bits_to_float(fsrc))); break;
-                    case 0x24: SETR(fdst_reg, rx_float_to_bits(rx_bits_to_float(fdst) / rx_bits_to_float(fsrc))); break;
+                    case 0x22: case 0x23: case 0x24: SETR(fdst_reg, rx_fpu(fop - 0x20, fdst, fsrc)); break;
                     case 0x25: SETR(fdst_reg, (uint32_t)(int32_t)rx_bits_to_float(fsrc)); break;
                     case 0x26: SETR(fdst_reg, (uint32_t)(int32_t)nearbyintf(rx_bits_to_float(fsrc))); break;
-                    case 0x28: SETR(fdst_reg, rx_float_to_bits(sqrtf(rx_bits_to_float(fsrc)))); break;
+                    case 0x28: SETR(fdst_reg, rx_fpu(RX_FPU_SQRT, fdst, fsrc)); break;
                     case 0x29: SETR(fdst_reg, (uint32_t)rx_bits_to_float(fsrc)); break;
                     default:
                         result = -1;
@@ -2139,11 +2160,9 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 int rd = b2 & 0xf;
                 uint32_t dst = GETR(rd);
                 switch(b2 >> 4) {
-                    case 0: SETR(rd, rx_float_to_bits(rx_bits_to_float(dst) - rx_bits_to_float(imm))); break;
+                    case 0: SETR(rd, rx_fpu(RX_FPU_SUB, dst, imm)); break;
                     case 1: rx_do_fcmp(env, ex, dst, imm); break;
-                    case 2: SETR(rd, rx_float_to_bits(rx_bits_to_float(dst) + rx_bits_to_float(imm))); break;
-                    case 3: SETR(rd, rx_float_to_bits(rx_bits_to_float(dst) * rx_bits_to_float(imm))); break;
-                    case 4: SETR(rd, rx_float_to_bits(rx_bits_to_float(dst) / rx_bits_to_float(imm))); break;
+                    case 2: case 3: case 4: SETR(rd, rx_fpu(b2 >> 4, dst, imm)); break;
                     default: result = -1; goto done;
                 }
                 break;
@@ -2448,9 +2467,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                     rx_set_sz(env, ex, v, 4);
                     break;
                 }
-                case 0x8: SETR(rdst, rx_float_to_bits(rx_bits_to_float(b) - rx_bits_to_float(a))); break;
-                case 0xa: SETR(rdst, rx_float_to_bits(rx_bits_to_float(b) + rx_bits_to_float(a))); break;
-                case 0xb: SETR(rdst, rx_float_to_bits(rx_bits_to_float(b) * rx_bits_to_float(a))); break;
+                case 0x8: case 0xa: case 0xb: SETR(rdst, rx_fpu(op - 8, b, a)); break;
                 default:
                     result = -1;
                     goto done;

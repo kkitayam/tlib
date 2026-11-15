@@ -1539,10 +1539,78 @@ static int gen_indirect_branch(DisasContextBase *base, uint8_t opcode)
     return length;
 }
 
+static int gen_fpu(DisasContextBase *base, uint8_t opcode)
+{
+    uint32_t pc = base->pc;
+    int op, dst_reg, length, src_reg = 0, second_reg = 0;
+    uint32_t displacement = 0, immediate = 0;
+    bool memory = false, imm = false, three = false;
+    if(opcode == 0xfc) {
+        uint8_t b1 = ldub_code(pc + 1);
+        op = (b1 >> 2) - 0x20;
+        if(op < 0 || (op > RX_FPU_DIV && op != RX_FPU_SQRT)) return 0;
+        uint8_t operands = ldub_code(pc + 2);
+        int ss = b1 & 3;
+        src_reg = operands >> 4;
+        dst_reg = operands & 15;
+        length = 3;
+        displacement = read_disp(pc + length, ss, 4);
+        length += ss == 1 ? 1 : ss == 2 ? 2 : 0;
+        memory = ss != 3;
+    } else if(opcode == 0xfd && ldub_code(pc + 1) == 0x72) {
+        uint8_t operands = ldub_code(pc + 2);
+        op = operands >> 4;
+        if(op > RX_FPU_DIV) return 0;
+        dst_reg = operands & 15;
+        length = 3;
+        immediate = read_immediate(pc + length, 0, &length, false);
+        imm = true;
+    } else if(opcode == 0xff) {
+        uint8_t b1 = ldub_code(pc + 1);
+        int group = b1 >> 4;
+        if(group != 8 && group != 10 && group != 11) return 0;
+        uint8_t operands = ldub_code(pc + 2);
+        op = group - 8;
+        dst_reg = b1 & 15;
+        src_reg = operands >> 4;
+        second_reg = operands & 15;
+        length = 3;
+        three = true;
+    } else {
+        return 0;
+    }
+
+    TCGv src = tcg_temp_new(), dst = tcg_temp_new();
+    tcg_gen_movi_tl(cpu_pc, pc);
+    if(imm) tcg_gen_movi_tl(src, immediate);
+    else if(memory) {
+        TCGv address = tcg_temp_new();
+        gen_address(address, src_reg, displacement);
+        gen_load_mem(src, address, 4, false, base->mem_idx);
+        tcg_temp_free(address);
+    } else gen_read_reg(src, src_reg);
+    if(op == RX_FPU_SQRT) tcg_gen_movi_tl(dst, 0);
+    else gen_read_reg(dst, three ? second_reg : dst_reg);
+    if(op == RX_FPU_CMP) {
+        gen_helper_rx_fcmp(cpu_env, dst, src);
+    } else {
+        TCGv operation = tcg_const_tl(op), result = tcg_temp_new();
+        gen_helper_rx_fpu(result, cpu_env, operation, dst, src);
+        gen_write_reg(dst_reg, result);
+        tcg_temp_free(result);
+        tcg_temp_free(operation);
+    }
+    tcg_temp_free(dst);
+    tcg_temp_free(src);
+    return length;
+}
+
 static int gen_rx_insn(DisasContextBase *base)
 {
     uint32_t pc = base->pc;
     uint8_t opcode = ldub_code(pc);
+    int fpu_length = gen_fpu(base, opcode);
+    if(fpu_length) return fpu_length;
     if(opcode == 0xfd) {
         uint8_t op = ldub_code(pc + 1);
         if(op <= 0x0f || op == 0x17 || op == 0x18 || op == 0x19 || op == 0x1e || op == 0x1f ||
