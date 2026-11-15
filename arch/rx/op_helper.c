@@ -5,7 +5,6 @@
  * TCG, and in a side-effect-free mode to determine their length.
  */
 
-#include <math.h>
 #include <stdint.h>
 
 #include "cpu.h"
@@ -370,81 +369,163 @@ static void rx_do_shift(CPUState *env, int ex, int kind, int count, int src_reg,
     }
 }
 
-static float rx_bits_to_float(uint32_t bits)
+#define FPSW_CV          (1u << 2)
+#define FPSW_CO          (1u << 3)
+#define FPSW_CZ          (1u << 4)
+#define FPSW_CU          (1u << 5)
+#define FPSW_CX          (1u << 6)
+#define FPSW_CE          (1u << 7)
+#define FPSW_CAUSE_MASK  (FPSW_CV | FPSW_CO | FPSW_CZ | FPSW_CU | FPSW_CX | FPSW_CE)
+#define FPSW_DN          (1u << 8)
+#define FPSW_EO          (1u << 11)
+#define FPSW_EU          (1u << 13)
+#define FPSW_ENABLE_MASK 0x7c00u
+
+void helper_rx_write_fpsw(CPUState *env, target_ulong value)
 {
-    union {
-        uint32_t u;
-        float f;
-    } cvt;
-    cvt.u = bits;
-    return cvt.f;
+    uint32_t causes = env->fpsw & value & FPSW_CAUSE_MASK;
+    env->fpsw = rx_fpsw_normalize((value & ~FPSW_CAUSE_MASK) | causes);
 }
 
-static uint32_t rx_float_to_bits(float value)
+static bool rx_float_nan(uint32_t value)
 {
-    union {
-        uint32_t u;
-        float f;
-    } cvt;
-    cvt.f = value;
-    return cvt.u;
+    return (value & 0x7fffffffu) > 0x7f800000u;
 }
 
-static uint32_t rx_fpu(int op, uint32_t dst, uint32_t src)
+static bool rx_float_snan(uint32_t value)
 {
+    return rx_float_nan(value) && !(value & 0x00400000u);
+}
+
+static bool rx_float_denormal(uint32_t value)
+{
+    uint32_t magnitude = value & 0x7fffffffu;
+    return magnitude && magnitude < 0x00800000u;
+}
+
+static void rx_fpu_finish(CPUState *env, unsigned cause)
+{
+    uint32_t enabled = (env->fpsw & FPSW_ENABLE_MASK) >> 8;
+    uint32_t sticky = (cause & enabled) || (cause & FPSW_CE) ? 0 : (cause & ~enabled & 0x7cu) << 24;
+    env->fpsw = rx_fpsw_normalize((env->fpsw & ~FPSW_CAUSE_MASK) | cause | sticky);
+    if((cause & enabled) || (cause & FPSW_CE)) {
+        env->exception_index = EXCP_RX_FLOATING_POINT;
+        cpu_loop_exit(env);
+    }
+}
+
+static uint32_t rx_fpu(CPUState *env, int op, uint32_t dst, uint32_t src)
+{
+    static const int rounding[] = {
+        float_round_nearest_even, float_round_to_zero, float_round_up, float_round_down
+    };
+    float_status status = { 0 };
+    bool binary = op <= RX_FPU_DIV;
+    bool conversion = op == RX_FPU_ITOF || op == RX_FPU_UTOF;
+    uint32_t result = 0, cause = 0;
+    int flags;
+
+    set_float_rounding_mode(rounding[env->fpsw & 3], &status);
+    set_float_detect_tininess(float_tininess_before_rounding, &status);
+    if(!conversion) {
+        bool snan = rx_float_snan(src) || (binary && rx_float_snan(dst));
+        bool nan = rx_float_nan(src) || (binary && rx_float_nan(dst));
+        if(snan || (nan && op >= RX_FPU_FTOI && op != RX_FPU_SQRT)) {
+            cause = FPSW_CV;
+        }
+        if(!nan && (rx_float_denormal(src) || (binary && rx_float_denormal(dst)))) {
+            if(!(env->fpsw & FPSW_DN)) {
+                rx_fpu_finish(env, FPSW_CE);
+            }
+            if(rx_float_denormal(src)) src &= 0x80000000u;
+            if(binary && rx_float_denormal(dst)) dst &= 0x80000000u;
+        }
+        if(nan && (op == RX_FPU_SUB || op == RX_FPU_ADD || op == RX_FPU_MUL ||
+                   op == RX_FPU_DIV || op == RX_FPU_SQRT)) {
+            if(binary && rx_float_snan(dst)) result = dst;
+            else if(rx_float_snan(src)) result = src;
+            else if(binary && rx_float_nan(dst)) result = dst;
+            else result = src;
+            result |= 0x00400000u;
+            rx_fpu_finish(env, cause);
+            rx_set_sz(env, 1, result, 4);
+            return result;
+        }
+    }
+
     switch(op) {
-        case RX_FPU_SUB: return rx_float_to_bits(rx_bits_to_float(dst) - rx_bits_to_float(src));
-        case RX_FPU_ADD: return rx_float_to_bits(rx_bits_to_float(dst) + rx_bits_to_float(src));
-        case RX_FPU_MUL: return rx_float_to_bits(rx_bits_to_float(dst) * rx_bits_to_float(src));
-        case RX_FPU_DIV: return rx_float_to_bits(rx_bits_to_float(dst) / rx_bits_to_float(src));
-        case RX_FPU_SQRT: return rx_float_to_bits(sqrtf(rx_bits_to_float(src)));
+        case RX_FPU_SUB: result = float32_sub(dst, src, &status); break;
+        case RX_FPU_ADD: result = float32_add(dst, src, &status); break;
+        case RX_FPU_MUL: result = float32_mul(dst, src, &status); break;
+        case RX_FPU_DIV: result = float32_div(dst, src, &status); break;
+        case RX_FPU_SQRT: result = float32_sqrt(src, &status); break;
+        case RX_FPU_ITOF: result = int32_to_float32((int32_t)src, &status); break;
+        case RX_FPU_UTOF: result = uint32_to_float32(src, &status); break;
+        case RX_FPU_FTOI: result = float32_to_int32_round_to_zero(src, &status); break;
+        case RX_FPU_FTOU:
+            if((src & 0x80000000u) && (src & 0x7fffffffu)) {
+                cause |= FPSW_CV;
+            } else {
+                result = float32_to_uint32_round_to_zero(src, &status);
+            }
+            break;
+        case RX_FPU_ROUND: result = float32_to_int32(src, &status); break;
         default: abort();
     }
+    flags = get_float_exception_flags(&status);
+    if(flags & float_flag_invalid) cause |= FPSW_CV;
+    if(cause & FPSW_CV) flags &= ~float_flag_inexact;
+    if(flags & float_flag_overflow) cause |= FPSW_CO;
+    if(flags & float_flag_divbyzero) cause |= FPSW_CZ;
+    if((flags & float_flag_underflow) || (!conversion && op <= RX_FPU_DIV && rx_float_denormal(result))) {
+        cause |= FPSW_CU;
+        flags &= ~float_flag_inexact;
+        if(!(env->fpsw & FPSW_DN) && !(env->fpsw & FPSW_EU)) {
+            rx_fpu_finish(env, cause | FPSW_CE);
+        }
+        result &= 0x80000000u;
+    }
+    if((flags & float_flag_overflow) && (env->fpsw & FPSW_EO)) flags &= ~float_flag_inexact;
+    if(flags & float_flag_inexact) cause |= FPSW_CX;
+    if(cause & FPSW_CV) {
+        if(op == RX_FPU_FTOI || op == RX_FPU_ROUND) result = (src >> 31) ? 0x80000000u : 0x7fffffffu;
+        else if(op == RX_FPU_FTOU) result = (src >> 31) ? 0 : UINT32_MAX;
+        else result = 0x7fffffffu;
+    }
+    rx_fpu_finish(env, cause);
+    if(op == RX_FPU_FTOI || op == RX_FPU_FTOU || op == RX_FPU_ROUND) {
+        rx_set_sz(env, 1, result, 4);
+    } else {
+        env->psw &= ~(PSW_ZERO | PSW_SIGN);
+        if(!(result & 0x7fffffffu)) env->psw |= PSW_ZERO;
+        if(result & 0x80000000u) env->psw |= PSW_SIGN;
+    }
+    return result;
 }
 
 target_ulong helper_rx_fpu(CPUState *env, target_ulong op, target_ulong dst, target_ulong src)
 {
-    (void)env;
-    return rx_fpu(op, dst, src);
-}
-
-target_ulong helper_rx_itof(target_ulong value)
-{
-    return rx_float_to_bits((float)(int32_t)value);
-}
-
-target_ulong helper_rx_utof(target_ulong value)
-{
-    return rx_float_to_bits((float)(uint32_t)value);
-}
-
-static void rx_set_fpsw_flags(CPUState *env, int ex, int z, int s)
-{
-    uint32_t fpsw;
-
-    if(!ex) {
-        return;
-    }
-    fpsw = env->fpsw & ~(0x02u | 0x04u);
-    if(z) {
-        fpsw |= 0x02u;
-    }
-    if(s) {
-        fpsw |= 0x04u;
-    }
-    env->fpsw = fpsw;
+    return rx_fpu(env, op, dst, src);
 }
 
 static void rx_do_fcmp(CPUState *env, int ex, uint32_t a, uint32_t b)
 {
-    float fa = rx_bits_to_float(a);
-    float fb = rx_bits_to_float(b);
-    int unordered = (fa != fa) || (fb != fb);
-
-    rx_set_fpsw_flags(env, ex, !unordered && fa == fb, !unordered && fa < fb);
-    if(unordered && ex) {
-        env->fpsw |= 0x40u;
+    float_status status = { 0 };
+    int relation;
+    if(!ex) return;
+    if(!rx_float_nan(a) && !rx_float_nan(b)) {
+        if(rx_float_denormal(a) || rx_float_denormal(b)) {
+            if(!(env->fpsw & FPSW_DN)) rx_fpu_finish(env, FPSW_CE);
+            if(rx_float_denormal(a)) a &= 0x80000000u;
+            if(rx_float_denormal(b)) b &= 0x80000000u;
+        }
     }
+    relation = float32_compare_quiet(a, b, &status);
+    rx_fpu_finish(env, get_float_exception_flags(&status) & float_flag_invalid ? FPSW_CV : 0);
+    env->psw &= ~(PSW_ZERO | PSW_SIGN | PSW_OVERFLOW);
+    if(relation == float_relation_equal) env->psw |= PSW_ZERO;
+    if(relation == float_relation_less) env->psw |= PSW_SIGN;
+    if(relation == float_relation_unordered) env->psw |= PSW_OVERFLOW;
 }
 
 void helper_rx_fcmp(CPUState *env, target_ulong dst, target_ulong src)
@@ -527,7 +608,7 @@ static int rx_set_control_register(CPUState *env, int cr, uint32_t value)
         }
         case 0x1: env->pc = value; return 1;
         case 0x2: env->usp = value; return 1;
-        case 0x3: env->fpsw = value; return 1;
+        case 0x3: helper_rx_write_fpsw(env, value); return 1;
         case 0x4: env->cpen = value; return 1;
         case 0x8: env->bpsw = value; return 1;
         case 0x9: env->bpc = value; return 1;
@@ -1278,10 +1359,10 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                         break;
                     }
                     case 0x11:
-                        SETR(rdst, rx_float_to_bits((float)(int32_t)src));
+                        SETR(rdst, rx_fpu(env, RX_FPU_ITOF, 0, src));
                         break;
                     case 0x15:
-                        SETR(rdst, rx_float_to_bits((float)src));
+                        SETR(rdst, rx_fpu(env, RX_FPU_UTOF, 0, src));
                         break;
                     default:
                         result = -1;
@@ -1880,13 +1961,11 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 uint32_t fdst = GETR(fdst_reg);
 
                 switch(fop) {
-                    case 0x20: SETR(fdst_reg, rx_fpu(RX_FPU_SUB, fdst, fsrc)); break;
+                    case 0x20: SETR(fdst_reg, rx_fpu(env, RX_FPU_SUB, fdst, fsrc)); break;
                     case 0x21: rx_do_fcmp(env, ex, fdst, fsrc); break;
-                    case 0x22: case 0x23: case 0x24: SETR(fdst_reg, rx_fpu(fop - 0x20, fdst, fsrc)); break;
-                    case 0x25: SETR(fdst_reg, (uint32_t)(int32_t)rx_bits_to_float(fsrc)); break;
-                    case 0x26: SETR(fdst_reg, (uint32_t)(int32_t)nearbyintf(rx_bits_to_float(fsrc))); break;
-                    case 0x28: SETR(fdst_reg, rx_fpu(RX_FPU_SQRT, fdst, fsrc)); break;
-                    case 0x29: SETR(fdst_reg, (uint32_t)rx_bits_to_float(fsrc)); break;
+                    case 0x22: case 0x23: case 0x24: SETR(fdst_reg, rx_fpu(env, fop - 0x20, fdst, fsrc)); break;
+                    case 0x25: case 0x26: case 0x28: case 0x29:
+                        SETR(fdst_reg, rx_fpu(env, fop - 0x20, fdst, fsrc)); break;
                     default:
                         result = -1;
                         goto done;
@@ -1917,10 +1996,10 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                             break;
                         }
                         case 17:
-                            SETR(adst, rx_float_to_bits((float)(int32_t)value));
+                            SETR(adst, rx_fpu(env, RX_FPU_ITOF, 0, value));
                             break;
                         default:
-                            SETR(adst, rx_float_to_bits((float)value));
+                            SETR(adst, rx_fpu(env, RX_FPU_UTOF, 0, value));
                             break;
                     }
                     break;
@@ -2023,7 +2102,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                         break;
                     }
                     case 0x47:
-                        SETR(rdst, rx_float_to_bits((float)(int32_t)GETR(rsrc)));
+                        SETR(rdst, rx_fpu(env, RX_FPU_ITOF, 0, GETR(rsrc)));
                         break;
                     case 0x4b:
                         if(rx_condition_true(env, 0)) {
@@ -2036,7 +2115,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                         }
                         break;
                     case 0x57:
-                        SETR(rdst, rx_float_to_bits((float)GETR(rsrc)));
+                        SETR(rdst, rx_fpu(env, RX_FPU_UTOF, 0, GETR(rsrc)));
                         break;
                     default:
                         result = -1;
@@ -2160,9 +2239,9 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 int rd = b2 & 0xf;
                 uint32_t dst = GETR(rd);
                 switch(b2 >> 4) {
-                    case 0: SETR(rd, rx_fpu(RX_FPU_SUB, dst, imm)); break;
+                    case 0: SETR(rd, rx_fpu(env, RX_FPU_SUB, dst, imm)); break;
                     case 1: rx_do_fcmp(env, ex, dst, imm); break;
-                    case 2: case 3: case 4: SETR(rd, rx_fpu(b2 >> 4, dst, imm)); break;
+                    case 2: case 3: case 4: SETR(rd, rx_fpu(env, b2 >> 4, dst, imm)); break;
                     default: result = -1; goto done;
                 }
                 break;
@@ -2467,7 +2546,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                     rx_set_sz(env, ex, v, 4);
                     break;
                 }
-                case 0x8: case 0xa: case 0xb: SETR(rdst, rx_fpu(op - 8, b, a)); break;
+                case 0x8: case 0xa: case 0xb: SETR(rdst, rx_fpu(env, op - 8, b, a)); break;
                 default:
                     result = -1;
                     goto done;

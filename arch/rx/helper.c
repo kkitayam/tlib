@@ -235,7 +235,7 @@ void rx_reset_state(CPUState *env)
     env->bpsw = 0;
     env->bpc = 0;
     env->fintv = 0;
-    env->fpsw = 0;
+    env->fpsw = 0x100;
     env->acc0 = 0;
     env->acc1 = 0;
     env->cpen = 0;
@@ -326,6 +326,8 @@ void do_interrupt(CPUState *env)
         handler = ldl_phys(env->extb + RX_EXCEPTION_UNDEFINED_OFFSET);
     } else if(vector == EXCP_RX_PRIVILEGED_INSTRUCTION) {
         handler = ldl_phys(env->extb + RX_EXCEPTION_PRIVILEGED_OFFSET);
+    } else if(vector == EXCP_RX_FLOATING_POINT) {
+        handler = ldl_phys(env->extb + RX_EXCEPTION_FLOAT_OFFSET);
     } else {
         handler = ldl_phys(env->intb + vector * 4);
     }

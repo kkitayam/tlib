@@ -138,6 +138,9 @@ EXC_INT_1(uint32_t, tlib_get_register_value_32, int, reg_number)
 void tlib_set_register_value_32(int reg_number, uint32_t value)
 {
     switch(reg_number) {
+        case FPSW_32:
+            cpu->fpsw = rx_fpsw_normalize(value);
+            return;
         case ACC0_HIGH_32:
             rx_set_acc0_high(cpu, value);
             return;
