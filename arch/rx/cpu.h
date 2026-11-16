@@ -146,9 +146,10 @@ typedef struct DisasContext DisasContext;
 
 struct DisasContext {
     DisasContextBase base;
-    /* RX does not use precise SMC invalidation; retranslate after any store. */
     bool stop_after_instruction;
     bool is_v3;
+    bool has_store;
+    TCGv_i32 store_flags;
 };
 
 static inline void cpu_get_tb_cpu_state(CPUState *env, target_ulong *pc, target_ulong *cs_base, int *flags)

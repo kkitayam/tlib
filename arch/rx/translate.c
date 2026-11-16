@@ -504,10 +504,26 @@ static void gen_load_mem(TCGv value, TCGv address, int size, bool is_signed, int
     tcg_gen_qemu_ld_tl(value, address, mem_idx, op | MO_UNALN);
 }
 
-static void gen_store_mem(TCGv value, TCGv address, int size, int mem_idx)
+static void gen_store_mem(DisasContextBase *base, TCGv value, TCGv address, int size)
 {
+    DisasContext *dc = (DisasContext *)base;
     TCGMemOp op = size == 1 ? MO_UB : size == 2 ? MO_LEUW : MO_LEUL;
-    tcg_gen_qemu_st_tl(value, address, mem_idx, op | MO_UNALN);
+    if(!dc->has_store) {
+        dc->store_flags = tcg_temp_local_new_i32();
+        tcg_gen_movi_i32(dc->store_flags, 0);
+        dc->has_store = true;
+    }
+    tcg_gen_qemu_st_tl(value, address, base->mem_idx, op | MO_UNALN);
+    TCGv_i32 flags = tcg_temp_new_i32();
+    TCGv_i32 width = tcg_const_i32(size);
+    TCGv_i32 mmu_idx = tcg_const_i32(base->mem_idx);
+    TCGv_ptr tb = tcg_const_ptr((tcg_target_long)base->tb);
+    gen_helper_rx_store_check(flags, cpu_env, tb, address, width, mmu_idx);
+    tcg_gen_or_i32(dc->store_flags, dc->store_flags, flags);
+    tcg_temp_free_ptr(tb);
+    tcg_temp_free_i32(mmu_idx);
+    tcg_temp_free_i32(width);
+    tcg_temp_free_i32(flags);
 }
 
 static uint32_t read_disp(uint32_t pc, int type, int size)
@@ -566,8 +582,7 @@ static int gen_mov(DisasContextBase *base, uint8_t opcode)
             gen_write_reg(reg, value);
         } else {
             gen_read_reg(value, reg);
-            gen_store_mem(value, address, size, base->mem_idx);
-            ((DisasContext *)base)->stop_after_instruction = true;
+            gen_store_mem(base, value, address, size);
         }
         tcg_temp_free(value);
         tcg_temp_free(address);
@@ -600,8 +615,7 @@ static int gen_mov(DisasContextBase *base, uint8_t opcode)
     if(ss == 3 && sd != 3) {
         gen_read_reg(value, dst);
         gen_address(address, src, dst_disp);
-        gen_store_mem(value, address, size, base->mem_idx);
-        ((DisasContext *)base)->stop_after_instruction = true;
+        gen_store_mem(base, value, address, size);
     } else {
         if(ss == 3) {
             gen_read_reg(value, src);
@@ -618,8 +632,7 @@ static int gen_mov(DisasContextBase *base, uint8_t opcode)
             gen_write_reg(dst, value);
         } else {
             gen_address(address, dst, dst_disp);
-            gen_store_mem(value, address, size, base->mem_idx);
-            ((DisasContext *)base)->stop_after_instruction = true;
+            gen_store_mem(base, value, address, size);
         }
     }
     tcg_temp_free(value);
@@ -668,8 +681,7 @@ static int gen_mov_imm(DisasContextBase *base, uint8_t opcode)
         TCGv address = tcg_temp_new(), value = tcg_const_tl(ldub_code(pc + 2));
         tcg_gen_movi_tl(cpu_pc, pc);
         gen_address(address, (operands >> 4) & 7, displacement);
-        gen_store_mem(value, address, size, base->mem_idx);
-        ((DisasContext *)base)->stop_after_instruction = true;
+        gen_store_mem(base, value, address, size);
         tcg_temp_free(value);
         tcg_temp_free(address);
         return 3;
@@ -705,8 +717,7 @@ static int gen_mov_imm(DisasContextBase *base, uint8_t opcode)
         TCGv address = tcg_temp_new();
         tcg_gen_movi_tl(cpu_pc, pc);
         gen_address(address, reg, displacement);
-        gen_store_mem(value, address, size, base->mem_idx);
-        ((DisasContext *)base)->stop_after_instruction = true;
+        gen_store_mem(base, value, address, size);
         tcg_temp_free(address);
     }
     tcg_temp_free(value);
@@ -767,8 +778,7 @@ static int gen_memory_bit(DisasContextBase *base, uint8_t opcode)
         } else {
             tcg_gen_xor_tl(value, value, mask);
         }
-        gen_store_mem(value, address, 1, base->mem_idx);
-        ((DisasContext *)base)->stop_after_instruction = true;
+        gen_store_mem(base, value, address, 1);
     }
     tcg_temp_free(value);
     tcg_temp_free(address);
@@ -796,8 +806,7 @@ static int gen_memory_bit_cond(DisasContextBase *base, uint8_t opcode)
     gen_address(address, operands >> 4, displacement);
     gen_load_mem(value, address, 1, false, base->mem_idx);
     gen_bit_cond_value(value, (operation >> 2) & 7, operands & 15);
-    gen_store_mem(value, address, 1, base->mem_idx);
-    ((DisasContext *)base)->stop_after_instruction = true;
+    gen_store_mem(base, value, address, 1);
     tcg_temp_free(value);
     tcg_temp_free(address);
     return length;
@@ -1046,8 +1055,7 @@ static int gen_special_data(DisasContextBase *base, uint8_t opcode)
             tcg_gen_movi_tl(cpu_pc, pc);
             gen_address(address, operands >> 4, displacement);
             gen_load_mem(value, address, size, mx != 3, base->mem_idx);
-            gen_store_mem(dst, address, size, base->mem_idx);
-            ((DisasContext *)base)->stop_after_instruction = true;
+            gen_store_mem(base, dst, address, size);
         }
         gen_write_reg(operands & 15, value);
         tcg_temp_free(address);
@@ -1066,9 +1074,8 @@ static int gen_special_data(DisasContextBase *base, uint8_t opcode)
         gen_address(address, operands >> 4, displacement);
         gen_load_mem(value, address, 1, false, base->mem_idx);
         gen_read_reg(dst, operands & 15);
-        gen_store_mem(dst, address, 1, base->mem_idx);
+        gen_store_mem(base, dst, address, 1);
         gen_write_reg(operands & 15, value);
-        ((DisasContext *)base)->stop_after_instruction = true;
         tcg_temp_free(address);
         tcg_temp_free(dst);
         tcg_temp_free(value);
@@ -1086,8 +1093,7 @@ static int gen_special_data(DisasContextBase *base, uint8_t opcode)
             TCGv address = tcg_temp_new();
             tcg_gen_movi_tl(cpu_pc, pc);
             gen_address(address, operands >> 4, displacement);
-            gen_store_mem(value, address, size, base->mem_idx);
-            ((DisasContext *)base)->stop_after_instruction = true;
+            gen_store_mem(base, value, address, size);
             tcg_temp_free(address);
         }
         tcg_temp_free(value);
@@ -1217,8 +1223,7 @@ static int gen_control(DisasContextBase *base, uint8_t opcode)
         if(push) {
             tcg_gen_subi_tl(stack, stack, 4);
             gen_write_reg(0, stack);
-            gen_store_mem(value, stack, 4, base->mem_idx);
-            ((DisasContext *)base)->stop_after_instruction = true;
+            gen_store_mem(base, value, stack, 4);
         } else {
             gen_load_mem(value, stack, 4, false, base->mem_idx);
             tcg_gen_addi_tl(stack, stack, 4);
@@ -1308,7 +1313,7 @@ static int gen_stack(DisasContextBase *base, uint8_t opcode)
             else if(size == 2) tcg_gen_andi_tl(value, value, 0xffff);
             tcg_gen_subi_tl(stack, stack, 4);
             gen_write_reg(0, stack);
-            gen_store_mem(value, stack, 4, base->mem_idx);
+            gen_store_mem(base, value, stack, 4);
         } else {
             gen_load_mem(value, stack, 4, false, base->mem_idx);
             tcg_gen_addi_tl(stack, stack, 4);
@@ -1316,7 +1321,6 @@ static int gen_stack(DisasContextBase *base, uint8_t opcode)
             gen_write_reg(reg, value);
         }
     }
-    if(push) ((DisasContext *)base)->stop_after_instruction = true;
     tcg_temp_free(value);
     tcg_temp_free(stack);
     return length;
@@ -1381,8 +1385,7 @@ static int gen_indexed_mov(DisasContextBase *base, uint8_t opcode)
     tcg_gen_add_tl(address, address, index);
     if(mode == 0) {
         gen_read_reg(value, b2 & 15);
-        gen_store_mem(value, address, size, base->mem_idx);
-        ((DisasContext *)base)->stop_after_instruction = true;
+        gen_store_mem(base, value, address, size);
     } else {
         gen_load_mem(value, address, size, mode == 1, base->mem_idx);
         gen_write_reg(b2 & 15, value);
@@ -1432,8 +1435,7 @@ static int gen_updated_mov(DisasContextBase *base, uint8_t opcode)
         gen_write_reg(data_reg, value);
     } else {
         gen_read_reg(value, data_reg);
-        gen_store_mem(value, address, size, base->mem_idx);
-        ((DisasContext *)base)->stop_after_instruction = true;
+        gen_store_mem(base, value, address, size);
     }
     if(!pre) {
         tcg_gen_addi_tl(address, address, size);
@@ -1525,7 +1527,7 @@ static int gen_indirect_branch(DisasContextBase *base, uint8_t opcode)
             gen_read_reg(stack, 0);
             tcg_gen_subi_tl(stack, stack, 4);
             gen_write_reg(0, stack);
-            gen_store_mem(return_pc, stack, 4, base->mem_idx);
+            gen_store_mem(base, return_pc, stack, 4);
             tcg_temp_free(return_pc);
             tcg_temp_free(stack);
         }
@@ -1882,6 +1884,8 @@ void setup_disas_context(DisasContextBase *base, CPUState *env)
 
 int gen_intermediate_code(CPUState *env, DisasContextBase *base)
 {
+    DisasContext *dc = (DisasContext *)base;
+    dc->has_store = false;
     tcg_gen_insn_start(base->pc);
     bool near_page_end = (base->pc & (TARGET_PAGE_SIZE - 1)) >= TARGET_PAGE_SIZE - RX_DECODE_PAGE_GUARD;
     int length = near_page_end ? 0 : gen_rx_insn(base);
@@ -1898,6 +1902,32 @@ int gen_intermediate_code(CPUState *env, DisasContextBase *base)
 
     base->tb->size += length;
     base->pc += length;
+
+    if(dc->has_store) {
+        int done = gen_new_label();
+        int no_flush = gen_new_label();
+        if(!env->singlestep_enabled && base->is_jmp == DISAS_NEXT) {
+            tcg_gen_brcondi_i32(TCG_COND_EQ, dc->store_flags, 0, done);
+            tcg_gen_movi_tl(cpu_pc, base->pc);
+            TCGv_i32 count = tcg_const_i32(base->tb->icount);
+            tcg_gen_st_i32(count, cpu_env, offsetof(CPUState, instructions_count_declaration));
+            if(env->block_finished_hook_present) {
+                TCGv first = tcg_const_tl(base->tb->pc);
+                gen_helper_block_finished_event(first, count);
+                tcg_temp_free(first);
+            }
+            tcg_temp_free_i32(count);
+            tcg_gen_brcondi_i32(TCG_COND_LTU, dc->store_flags, 2, no_flush);
+            gen_helper_rx_store_flush(cpu_env);
+            gen_set_label(no_flush);
+            tcg_gen_exit_tb(0);
+        } else {
+            tcg_gen_brcondi_i32(TCG_COND_LTU, dc->store_flags, 2, done);
+            gen_helper_rx_store_flush(cpu_env);
+        }
+        gen_set_label(done);
+        tcg_temp_free_i32(dc->store_flags);
+    }
 
     if(env->singlestep_enabled) {
         if(base->is_jmp == DISAS_NEXT) {

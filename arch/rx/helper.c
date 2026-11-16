@@ -5,6 +5,72 @@
 #include "callbacks.h"
 #include "arch_callbacks.h"
 
+uint32_t helper_rx_store_check(CPUState *env, TranslationBlock *tb, target_ulong address, uint32_t size, uint32_t mmu_idx)
+{
+    target_ulong page = address & TARGET_PAGE_MASK;
+    unsigned index = (address >> TARGET_PAGE_BITS) & (CPU_TLB_SIZE - 1);
+    target_ulong entry = env->tlb_table[mmu_idx][index].addr_write;
+    /* Ordinary RAM stores already mark affected TBs dirty in the common path. */
+    if(!external_mmu_enabled(env) && env->current_tb == tb && !env->tlib_is_on_memory_access_enabled &&
+       !(entry & TLB_MMIO) && (entry & (TARGET_PAGE_MASK | TLB_INVALID_MASK)) == page &&
+       (address & ~TARGET_PAGE_MASK) <= TARGET_PAGE_SIZE - size) {
+        tb_page_addr_t physical = (page + env->iotlb[mmu_idx][index]) & TARGET_PAGE_MASK;
+        return physical == tb->page_addr[0] || physical == tb->page_addr[1];
+    }
+
+    uint32_t flags = env->current_tb == tb ? 0 : 2;
+    uint32_t remaining = size;
+
+    while(remaining) {
+        target_ulong page = address & TARGET_PAGE_MASK;
+        uint32_t length = TARGET_PAGE_SIZE - (address & ~TARGET_PAGE_MASK);
+        unsigned index = (address >> TARGET_PAGE_BITS) & (CPU_TLB_SIZE - 1);
+        target_ulong entry = env->tlb_table[mmu_idx][index].addr_write;
+        if(length > remaining) {
+            length = remaining;
+        }
+        if((entry & (TARGET_PAGE_MASK | TLB_INVALID_MASK)) != page) {
+            flags |= 2;
+        } else {
+            tb_page_addr_t physical = (page + env->iotlb[mmu_idx][index]) & TARGET_PAGE_MASK;
+            if(physical == tb->page_addr[0] || physical == tb->page_addr[1]) {
+                flags |= 1;
+            }
+            if(!(entry & TLB_MMIO) || (entry & IO_MEM_EXECUTABLE_IO)) {
+                tb_page_addr_t start = physical + (address & ~TARGET_PAGE_MASK);
+                tb_invalidate_phys_page_range_checked(start, start + length, 0, env->tb_broadcast_dirty);
+            }
+        }
+        address += length;
+        remaining -= length;
+    }
+
+    unsigned hash = tb_phys_hash_func(tb->page_addr[0] + (tb->pc & ~TARGET_PAGE_MASK));
+    TranslationBlock *cached = tb_phys_hash[hash];
+    while(cached && cached != tb) {
+        cached = cached->phys_hash_next;
+    }
+    if(!cached) {
+        flags |= 1;
+    }
+    return flags;
+}
+
+void helper_rx_store_flush(CPUState *env)
+{
+    tb_flush(env);
+    if(env->tb_broadcast_dirty) {
+#if UINTPTR_MAX > UINT32_MAX
+        tlib_invalidate_tb_in_other_cpus(0, (uintptr_t)UINT32_MAX + 1);
+#else
+        for(uint64_t page = 0; page <= UINT32_MAX; page += TARGET_PAGE_SIZE) {
+            append_dirty_address(page);
+        }
+        flush_dirty_addresses_list();
+#endif
+    }
+}
+
 /* ------------------------------------------------------------------------- */
 /* External interrupts                                                       */
 /* ------------------------------------------------------------------------- */
