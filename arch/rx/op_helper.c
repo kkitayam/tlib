@@ -489,8 +489,12 @@ static uint32_t rx_fpu(CPUState *env, int op, uint32_t dst, uint32_t src)
     if(flags & float_flag_inexact) cause |= FPSW_CX;
     if(cause & FPSW_CV) {
         if(op == RX_FPU_FTOI || op == RX_FPU_ROUND) result = (src >> 31) ? 0x80000000u : 0x7fffffffu;
-        else if(op == RX_FPU_FTOU) result = (src >> 31) ? 0 : UINT32_MAX;
-        else result = 0x7fffffffu;
+        else if(op == RX_FPU_FTOU) {
+            /* NaN saturates by sign; positive overflow depends on DN. */
+            if(src & 0x80000000u) result = 0;
+            else if(rx_float_nan(src)) result = 0xffffffffu;
+            else result = (env->fpsw & FPSW_DN) ? 0xffffffffu : 0x7fffffffu;
+        } else result = 0x7fffffffu;
     }
     rx_fpu_finish(env, cause);
     if(op == RX_FPU_FTOI || op == RX_FPU_FTOU || op == RX_FPU_ROUND) {
