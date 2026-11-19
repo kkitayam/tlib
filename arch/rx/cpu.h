@@ -146,6 +146,7 @@ static inline int cpu_mmu_index(CPUState *env)
 
 typedef struct DisasContext DisasContext;
 
+/* Larger than any instruction decoded by the RX interpreter. */
 #define RX_DECODE_PAGE_GUARD 16
 
 #include "cpu-all.h"
