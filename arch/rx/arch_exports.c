@@ -114,3 +114,38 @@ void tlib_set_single_step(uint32_t enabled)
 }
 
 EXC_VOID_1(tlib_set_single_step, uint32_t, enabled)
+
+void tlib_rx_reset_store_stats(void)
+{
+    rx_store_stats_reset();
+}
+
+EXC_VOID_0(tlib_rx_reset_store_stats)
+
+uint64_t tlib_rx_get_store_checks(void)
+{
+    return rx_store_stats_checks();
+}
+
+EXC_INT_0(uint64_t, tlib_rx_get_store_checks)
+
+uint64_t tlib_rx_get_store_mmio_fast(void)
+{
+    return rx_store_stats_mmio_fast();
+}
+
+EXC_INT_0(uint64_t, tlib_rx_get_store_mmio_fast)
+
+uint64_t tlib_rx_get_store_range_invalidations(void)
+{
+    return rx_store_stats_range_invalidations();
+}
+
+EXC_INT_0(uint64_t, tlib_rx_get_store_range_invalidations)
+
+uint64_t tlib_rx_get_store_full_flushes(void)
+{
+    return rx_store_stats_full_flushes();
+}
+
+EXC_INT_0(uint64_t, tlib_rx_get_store_full_flushes)

@@ -5,20 +5,130 @@
 #include "callbacks.h"
 #include "arch_callbacks.h"
 
+void rx_store_stats_reset(void)
+{
+    cpu->store_stats_enabled = true;
+    cpu->store_check_count = 0;
+    cpu->store_mmio_fast_count = 0;
+    cpu->store_range_invalidation_count = 0;
+    cpu->store_full_flush_count = 0;
+}
+
+uint64_t rx_store_stats_checks(void)
+{
+    return cpu->store_check_count;
+}
+
+uint64_t rx_store_stats_mmio_fast(void)
+{
+    return cpu->store_mmio_fast_count;
+}
+
+uint64_t rx_store_stats_range_invalidations(void)
+{
+    return cpu->store_range_invalidation_count;
+}
+
+uint64_t rx_store_stats_full_flushes(void)
+{
+    return cpu->store_full_flush_count;
+}
+
+static bool rx_tb_is_cached(TranslationBlock *tb)
+{
+    unsigned hash = tb_phys_hash_func(tb->page_addr[0] + (tb->pc & ~TARGET_PAGE_MASK));
+    TranslationBlock *cached = tb_phys_hash[hash];
+    while(cached && cached != tb) {
+        cached = cached->phys_hash_next;
+    }
+    return cached != NULL;
+}
+
+static __attribute__((always_inline)) inline bool
+rx_store_overlaps_tb(CPUState *env, TranslationBlock *tb, tb_page_addr_t physical_page,
+                     uint32_t offset, uint32_t length)
+{
+    uint32_t tb_offset = tb->pc & ~TARGET_PAGE_MASK;
+    uint32_t tb_size = tb->size;
+
+    if(tb_size == 1 && tb_offset >= TARGET_PAGE_SIZE - RX_DECODE_PAGE_GUARD) {
+        tb_size = RX_DECODE_PAGE_GUARD;
+    }
+
+    uint32_t first_length = TARGET_PAGE_SIZE - tb_offset;
+    if(first_length > tb_size) {
+        first_length = tb_size;
+    }
+    if(physical_page == tb->page_addr[0] &&
+       offset < tb_offset + first_length && offset + length > tb_offset) {
+        return true;
+    }
+
+    uint32_t second_length = tb_size - first_length;
+    if(second_length == 0) {
+        return false;
+    }
+
+    tb_page_addr_t second_physical = tb->page_addr[1];
+    if(second_physical == (tb_page_addr_t)-1) {
+        target_ulong second_virtual = (tb->pc & TARGET_PAGE_MASK) + TARGET_PAGE_SIZE;
+        second_physical = get_page_addr_code(env, second_virtual, false);
+    }
+    return second_physical != (tb_page_addr_t)-1 && physical_page == second_physical &&
+           offset < second_length;
+}
+
+static bool rx_resolve_store_physical(target_ulong address, tb_page_addr_t *physical)
+{
+    target_ulong translated = virt_to_phys(address, ACCESS_DATA_STORE, 1);
+    if(translated == (target_ulong)-1) {
+        return false;
+    }
+    *physical = translated & TARGET_PAGE_MASK;
+    return true;
+}
+
+static uint32_t rx_store_mmio_result(CPUState *env, TranslationBlock *tb)
+{
+    if(env->store_stats_enabled) {
+        env->store_mmio_fast_count++;
+    }
+    return tb_invalidated_flag && !rx_tb_is_cached(tb);
+}
+
+static __attribute__((always_inline)) inline bool
+rx_tlb_had_nonexecutable_mmio(CPUState *env, uint32_t mmu_idx, unsigned index)
+{
+    target_phys_addr_t encoded = env->iotlb[mmu_idx][index] & ~TARGET_PAGE_MASK;
+    return encoded > IO_MEM_ROM && encoded != IO_MEM_NOTDIRTY && !(encoded & IO_MEM_EXECUTABLE_IO);
+}
+
 uint32_t helper_rx_store_check(CPUState *env, TranslationBlock *tb, target_ulong address, uint32_t size, uint32_t mmu_idx)
 {
     target_ulong page = address & TARGET_PAGE_MASK;
     unsigned index = (address >> TARGET_PAGE_BITS) & (CPU_TLB_SIZE - 1);
     target_ulong entry = env->tlb_table[mmu_idx][index].addr_write;
+    if(env->store_stats_enabled) {
+        env->store_check_count++;
+    }
+
+    bool entry_matches = (entry & (TARGET_PAGE_MASK | TLB_INVALID_MASK)) == page;
+    bool nonexecutable_mmio = entry_matches && (entry & TLB_MMIO) && !(entry & IO_MEM_EXECUTABLE_IO);
+    nonexecutable_mmio |= !entry_matches && rx_tlb_had_nonexecutable_mmio(env, mmu_idx, index);
+    if(nonexecutable_mmio &&
+       (address & ~TARGET_PAGE_MASK) <= TARGET_PAGE_SIZE - size) {
+        return rx_store_mmio_result(env, tb);
+    }
+
     /* Ordinary RAM stores already mark affected TBs dirty in the common path. */
     if(!external_mmu_enabled(env) && env->current_tb == tb && !env->tlib_is_on_memory_access_enabled &&
        !(entry & TLB_MMIO) && (entry & (TARGET_PAGE_MASK | TLB_INVALID_MASK)) == page &&
        (address & ~TARGET_PAGE_MASK) <= TARGET_PAGE_SIZE - size) {
         tb_page_addr_t physical = (page + env->iotlb[mmu_idx][index]) & TARGET_PAGE_MASK;
-        return physical == tb->page_addr[0] || physical == tb->page_addr[1];
+        return rx_store_overlaps_tb(env, tb, physical, address & ~TARGET_PAGE_MASK, size);
     }
 
-    uint32_t flags = env->current_tb == tb ? 0 : 2;
+    uint32_t flags = env->current_tb == tb ? 0 : 1;
     uint32_t remaining = size;
 
     while(remaining) {
@@ -30,27 +140,38 @@ uint32_t helper_rx_store_check(CPUState *env, TranslationBlock *tb, target_ulong
             length = remaining;
         }
         if((entry & (TARGET_PAGE_MASK | TLB_INVALID_MASK)) != page) {
-            flags |= 2;
-        } else {
-            tb_page_addr_t physical = (page + env->iotlb[mmu_idx][index]) & TARGET_PAGE_MASK;
-            if(physical == tb->page_addr[0] || physical == tb->page_addr[1]) {
+            tb_page_addr_t physical;
+            if(!rx_resolve_store_physical(address, &physical)) {
+                flags |= 2;
+                break;
+            }
+            if(rx_store_overlaps_tb(env, tb, physical, address & ~TARGET_PAGE_MASK, length)) {
                 flags |= 1;
             }
-            if(!(entry & TLB_MMIO) || (entry & IO_MEM_EXECUTABLE_IO)) {
-                tb_page_addr_t start = physical + (address & ~TARGET_PAGE_MASK);
-                tb_invalidate_phys_page_range_checked(start, start + length, 0, env->tb_broadcast_dirty);
+            if(env->store_stats_enabled) {
+                env->store_range_invalidation_count++;
             }
+            tb_invalidate_phys_page_range_checked(physical + (address & ~TARGET_PAGE_MASK),
+                                                  physical + (address & ~TARGET_PAGE_MASK) + length,
+                                                  0, env->tb_broadcast_dirty);
+        } else if((entry & TLB_MMIO) && !(entry & IO_MEM_EXECUTABLE_IO)) {
+            flags |= rx_store_mmio_result(env, tb);
+        } else {
+            tb_page_addr_t physical = (page + env->iotlb[mmu_idx][index]) & TARGET_PAGE_MASK;
+            if(rx_store_overlaps_tb(env, tb, physical, address & ~TARGET_PAGE_MASK, length)) {
+                flags |= 1;
+            }
+            if(env->store_stats_enabled) {
+                env->store_range_invalidation_count++;
+            }
+            tb_page_addr_t start = physical + (address & ~TARGET_PAGE_MASK);
+            tb_invalidate_phys_page_range_checked(start, start + length, 0, env->tb_broadcast_dirty);
         }
         address += length;
         remaining -= length;
     }
 
-    unsigned hash = tb_phys_hash_func(tb->page_addr[0] + (tb->pc & ~TARGET_PAGE_MASK));
-    TranslationBlock *cached = tb_phys_hash[hash];
-    while(cached && cached != tb) {
-        cached = cached->phys_hash_next;
-    }
-    if(!cached) {
+    if(tb_invalidated_flag && !rx_tb_is_cached(tb)) {
         flags |= 1;
     }
     return flags;
@@ -58,6 +179,9 @@ uint32_t helper_rx_store_check(CPUState *env, TranslationBlock *tb, target_ulong
 
 void helper_rx_store_flush(CPUState *env)
 {
+    if(env->store_stats_enabled) {
+        env->store_full_flush_count++;
+    }
     tb_flush(env);
     if(env->tb_broadcast_dirty) {
 #if UINTPTR_MAX > UINT32_MAX

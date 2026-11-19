@@ -128,6 +128,11 @@ typedef struct CPUState {
     bool singlestep_enabled;
 
     CPU_COMMON
+    bool store_stats_enabled;
+    uint64_t store_check_count;
+    uint64_t store_mmio_fast_count;
+    uint64_t store_range_invalidation_count;
+    uint64_t store_full_flush_count;
     pthread_mutex_t interrupt_lock;
 } CPUState;
 
@@ -141,6 +146,8 @@ static inline int cpu_mmu_index(CPUState *env)
 
 typedef struct DisasContext DisasContext;
 
+#define RX_DECODE_PAGE_GUARD 16
+
 #include "cpu-all.h"
 #include "exec-all.h"
 
@@ -151,6 +158,12 @@ struct DisasContext {
     bool has_store;
     TCGv_i32 store_flags;
 };
+
+void rx_store_stats_reset(void);
+uint64_t rx_store_stats_checks(void);
+uint64_t rx_store_stats_mmio_fast(void);
+uint64_t rx_store_stats_range_invalidations(void);
+uint64_t rx_store_stats_full_flushes(void);
 
 static inline void cpu_get_tb_cpu_state(CPUState *env, target_ulong *pc, target_ulong *cs_base, int *flags)
 {
