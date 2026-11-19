@@ -1095,14 +1095,38 @@ static int gen_special_data(DisasContextBase *base, uint8_t opcode)
         int slsb = field & 31, dlsb = (field >> 5) & 31;
         int width = ((field >> 10) & 31) - dlsb;
         if(width <= 0) width += 32;
+        uint32_t mask = width == 32 ? UINT32_MAX : (1u << width) - 1;
         TCGv value = tcg_temp_new(), dst = tcg_temp_new();
         gen_read_reg(value, operands >> 4);
-        tcg_gen_extract_i32(value, value, slsb, width);
+        /*
+         * The decoder does not restrict the field values, and the interpreter
+         * defines their result by masking.  Use the bit-field helpers only
+         * when the field fits in the register.
+         */
+        if(width == 32) {
+            tcg_gen_shri_tl(value, value, slsb);
+        } else if(slsb + width <= 32) {
+            tcg_gen_extract_i32(value, value, slsb, width);
+        } else {
+            tcg_gen_shri_tl(value, value, slsb);
+            tcg_gen_andi_tl(value, value, mask);
+        }
         if(b1 == 0x5a) {
-            tcg_gen_deposit_z_i32(value, value, dlsb, width);
+            if(dlsb + width <= 32) {
+                tcg_gen_deposit_z_i32(value, value, dlsb, width);
+            } else {
+                tcg_gen_shli_tl(value, value, dlsb);
+            }
         } else {
             gen_read_reg(dst, operands & 15);
-            tcg_gen_deposit_i32(dst, dst, value, dlsb, width);
+            if(dlsb + width <= 32) {
+                tcg_gen_deposit_i32(dst, dst, value, dlsb, width);
+            } else {
+                uint32_t destination_mask = mask << dlsb;
+                tcg_gen_andi_tl(dst, dst, ~destination_mask);
+                tcg_gen_shli_tl(value, value, dlsb);
+                tcg_gen_or_tl(dst, dst, value);
+            }
             tcg_gen_mov_tl(value, dst);
         }
         gen_write_reg(operands & 15, value);
