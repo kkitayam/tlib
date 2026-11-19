@@ -499,6 +499,7 @@ void tb_flush(CPUState *env1)
     code_gen_ptr = tcg_rw_buffer;
     /* XXX: flush processor icache at this point if cache flush is
        expensive */
+    tb_invalidated_flag = 1;
     tb_flush_count++;
 }
 

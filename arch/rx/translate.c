@@ -3,7 +3,7 @@
 #include "tb-helper.h"
 
 /* Larger than any instruction decoded by the RX interpreter. */
-#define RX_DECODE_PAGE_GUARD 16
+
 
 static TCGv cpu_pc, cpu_psw, cpu_usp, cpu_isp;
 static TCGv cpu_regs[16];

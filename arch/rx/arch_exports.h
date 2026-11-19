@@ -26,3 +26,8 @@ void tlib_rx_set_nmi_pending(uint32_t pending);
  * callback until all executions have stopped. The callback must acknowledge
  * only the matching source generation and publish the next ICU candidate. */
 void tlib_rx_set_interrupt_acknowledge_callback(rx_acknowledge_callback_t callback);
+void tlib_rx_reset_store_stats(void);
+uint64_t tlib_rx_get_store_checks(void);
+uint64_t tlib_rx_get_store_mmio_fast(void);
+uint64_t tlib_rx_get_store_range_invalidations(void);
+uint64_t tlib_rx_get_store_full_flushes(void);
