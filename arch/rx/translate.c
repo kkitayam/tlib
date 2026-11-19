@@ -1092,7 +1092,8 @@ static int gen_special_data(DisasContextBase *base, uint8_t opcode)
     }
     if((b1 == 0x5a || b1 == 0x5e) && ((DisasContext *)base)->is_v3) {
         uint16_t field = ldub_code(pc + 3) | (ldub_code(pc + 4) << 8);
-        int slsb = field & 31, dlsb = (field >> 5) & 31;
+        int dlsb = (field >> 5) & 31;
+        int slsb = (dlsb - (field & 31)) & 31;
         int width = ((field >> 10) & 31) - dlsb;
         if(width <= 0) width += 32;
         uint32_t mask = width == 32 ? UINT32_MAX : (1u << width) - 1;

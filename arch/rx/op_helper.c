@@ -1938,8 +1938,8 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                     goto done;
                 }
                 field = rx_next16(&r);
-                slsb = field & 31;
                 dlsb = (field >> 5) & 31;
+                slsb = (dlsb - (field & 31)) & 31;
                 width = ((field >> 10) & 31) - dlsb;
                 if(width <= 0) {
                     width += 32;
