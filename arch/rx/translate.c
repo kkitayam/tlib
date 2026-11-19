@@ -56,8 +56,8 @@ static void gen_sz_flags(TCGv result)
     TCGv temp = tcg_temp_new();
     tcg_gen_setcondi_tl(TCG_COND_EQ, flags, result, 0);
     tcg_gen_shli_tl(flags, flags, 1);
-    tcg_gen_shri_tl(temp, result, 29);
-    tcg_gen_andi_tl(temp, temp, PSW_SIGN);
+    tcg_gen_extract_i32(temp, result, 31, 1);
+    tcg_gen_shli_tl(temp, temp, 2);
     tcg_gen_or_tl(flags, flags, temp);
     tcg_gen_andi_tl(cpu_psw, cpu_psw, ~(PSW_ZERO | PSW_SIGN));
     tcg_gen_or_tl(cpu_psw, cpu_psw, flags);
@@ -73,14 +73,15 @@ static void gen_arithmetic_flags(TCGv dst, TCGv src, TCGv result, bool subtract)
 
     tcg_gen_setcond_tl(subtract ? TCG_COND_GEU : TCG_COND_LTU,
                        flags, subtract ? dst : result, subtract ? src : dst);
-    tcg_gen_xor_tl(overflow, dst, src);
-    if(!subtract) {
-        tcg_gen_not_tl(overflow, overflow);
+    if(subtract) {
+        tcg_gen_xor_tl(overflow, dst, src);
+    } else {
+        tcg_gen_eqv_tl(overflow, dst, src);
     }
     tcg_gen_xor_tl(temp, dst, result);
     tcg_gen_and_tl(overflow, overflow, temp);
-    tcg_gen_shri_tl(overflow, overflow, 28);
-    tcg_gen_andi_tl(overflow, overflow, PSW_OVERFLOW);
+    tcg_gen_extract_i32(overflow, overflow, 31, 1);
+    tcg_gen_shli_tl(overflow, overflow, 3);
     tcg_gen_or_tl(flags, flags, overflow);
     tcg_gen_andi_tl(cpu_psw, cpu_psw, ~(PSW_CARRY | PSW_OVERFLOW));
     tcg_gen_or_tl(cpu_psw, cpu_psw, flags);
@@ -236,14 +237,14 @@ static void gen_rotate_carry(int reg, bool left)
 {
     TCGv value = tcg_temp_new(), carry = tcg_temp_new(), old_carry = tcg_temp_new();
     gen_read_reg(value, reg);
-    tcg_gen_andi_tl(old_carry, cpu_psw, PSW_CARRY);
+    tcg_gen_extract_i32(old_carry, cpu_psw, 0, 1);
     if(left) {
-        tcg_gen_shri_tl(carry, value, 31);
+        tcg_gen_extract_i32(carry, value, 31, 1);
         tcg_gen_shli_tl(value, value, 1);
     } else {
-        tcg_gen_andi_tl(carry, value, 1);
+        tcg_gen_extract_i32(carry, value, 0, 1);
         tcg_gen_shri_tl(value, value, 1);
-        tcg_gen_shli_tl(old_carry, old_carry, 31);
+        tcg_gen_deposit_z_i32(old_carry, old_carry, 31, 1);
     }
     tcg_gen_or_tl(value, value, old_carry);
     tcg_gen_andi_tl(cpu_psw, cpu_psw, ~PSW_CARRY);
@@ -305,16 +306,19 @@ static void gen_bit_test(TCGv value)
 static void gen_bit_imm(int op, int bit, int reg)
 {
     TCGv value = tcg_temp_new();
-    uint32_t mask = 1u << bit;
     gen_read_reg(value, reg);
     if(op == 0) {
-        tcg_gen_ori_tl(value, value, mask);
+        TCGv mask = tcg_const_tl(1u << bit);
+        tcg_gen_or_tl(value, value, mask);
+        tcg_temp_free(mask);
         gen_write_reg(reg, value);
     } else if(op == 1) {
-        tcg_gen_andi_tl(value, value, ~mask);
+        TCGv mask = tcg_const_tl(1u << bit);
+        tcg_gen_andc_tl(value, value, mask);
+        tcg_temp_free(mask);
         gen_write_reg(reg, value);
     } else {
-        tcg_gen_andi_tl(value, value, mask);
+        tcg_gen_extract_i32(value, value, bit, 1);
         gen_bit_test(value);
     }
     tcg_temp_free(value);
@@ -375,17 +379,15 @@ static void gen_condition(TCGv result, int cond)
 {
     TCGv z = tcg_temp_new();
     TCGv s = tcg_temp_new();
-    tcg_gen_shri_tl(z, cpu_psw, 1);
-    tcg_gen_andi_tl(z, z, 1);
-    tcg_gen_shri_tl(s, cpu_psw, 2);
-    tcg_gen_andi_tl(s, s, 1);
+    tcg_gen_extract_i32(z, cpu_psw, 1, 1);
+    tcg_gen_extract_i32(s, cpu_psw, 2, 1);
 
     switch(cond) {
         case 0: case 1:
             tcg_gen_mov_tl(result, z);
             break;
         case 2: case 3: case 4: case 5:
-            tcg_gen_andi_tl(result, cpu_psw, PSW_CARRY);
+            tcg_gen_extract_i32(result, cpu_psw, 0, 1);
             if(cond >= 4) {
                 tcg_gen_xori_tl(z, z, 1);
                 tcg_gen_and_tl(result, result, z);
@@ -395,16 +397,14 @@ static void gen_condition(TCGv result, int cond)
             tcg_gen_mov_tl(result, s);
             break;
         case 8: case 9: case 10: case 11:
-            tcg_gen_shri_tl(result, cpu_psw, 3);
-            tcg_gen_andi_tl(result, result, 1);
+            tcg_gen_extract_i32(result, cpu_psw, 3, 1);
             tcg_gen_xor_tl(result, result, s);
             if(cond >= 10) {
                 tcg_gen_or_tl(result, result, z);
             }
             break;
         case 12: case 13:
-            tcg_gen_shri_tl(result, cpu_psw, 3);
-            tcg_gen_andi_tl(result, result, 1);
+            tcg_gen_extract_i32(result, cpu_psw, 3, 1);
             break;
         default:
             tcg_gen_movi_tl(result, cond == 14);
@@ -423,15 +423,9 @@ static void gen_bit_cond_value(TCGv value, int bit, int cond)
     if(cond == 15) {
         tcg_gen_xori_tl(value, value, mask);
     } else {
-        TCGv condition = tcg_temp_new(), zero = tcg_const_tl(0);
-        TCGv set = tcg_temp_new(), clear = tcg_temp_new();
+        TCGv condition = tcg_temp_new();
         gen_condition(condition, cond);
-        tcg_gen_ori_tl(set, value, mask);
-        tcg_gen_andi_tl(clear, value, ~mask);
-        tcg_gen_movcond_tl(TCG_COND_NE, value, condition, zero, set, clear);
-        tcg_temp_free(clear);
-        tcg_temp_free(set);
-        tcg_temp_free(zero);
+        tcg_gen_deposit_i32(value, value, condition, bit, 1);
         tcg_temp_free(condition);
     }
 }
@@ -1101,18 +1095,15 @@ static int gen_special_data(DisasContextBase *base, uint8_t opcode)
         int slsb = field & 31, dlsb = (field >> 5) & 31;
         int width = ((field >> 10) & 31) - dlsb;
         if(width <= 0) width += 32;
-        uint32_t mask = width == 32 ? UINT32_MAX : (1u << width) - 1;
-        uint32_t destination_mask = mask << dlsb;
         TCGv value = tcg_temp_new(), dst = tcg_temp_new();
         gen_read_reg(value, operands >> 4);
-        tcg_gen_shri_tl(value, value, slsb);
-        tcg_gen_andi_tl(value, value, mask);
-        tcg_gen_shli_tl(value, value, dlsb);
-        tcg_gen_andi_tl(value, value, destination_mask);
-        if(b1 == 0x5e) {
+        tcg_gen_extract_i32(value, value, slsb, width);
+        if(b1 == 0x5a) {
+            tcg_gen_deposit_z_i32(value, value, dlsb, width);
+        } else {
             gen_read_reg(dst, operands & 15);
-            tcg_gen_andi_tl(dst, dst, ~destination_mask);
-            tcg_gen_or_tl(value, value, dst);
+            tcg_gen_deposit_i32(dst, dst, value, dlsb, width);
+            tcg_gen_mov_tl(value, dst);
         }
         gen_write_reg(operands & 15, value);
         tcg_temp_free(dst);
