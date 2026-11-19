@@ -2,9 +2,6 @@
 #include "arch_callbacks.h"
 #include "tb-helper.h"
 
-/* Larger than any instruction decoded by the RX interpreter. */
-
-
 static TCGv cpu_pc, cpu_psw, cpu_usp, cpu_isp;
 static TCGv cpu_regs[16];
 
