@@ -1023,7 +1023,9 @@ static bool gen_reg_branch(RXDecode *d)
     if(hi == 0x40) {
         tcg_gen_addi_tl(target, target, d->pc);
     } else if(hi == 0x50) {
-        tcg_gen_addi_tl(target, target, d->pc + d->length);
+        /* BSR.L Rn branches to the instruction address plus Rn.  Only the
+         * return address pushed on the stack uses the next instruction. */
+        tcg_gen_addi_tl(target, target, d->pc);
     }
     tcg_gen_mov_tl(cpu_pc, target);
     tcg_temp_free(target);

@@ -1685,7 +1685,9 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
             }
             if(hi == 0x50) {
                 rx_push(env, ex, pc + r.off);
-                SET_JUMP((uint32_t)((int32_t)pc + (int32_t)r.off + (int32_t)GETR(b1 & 0xf)));
+                /* The branch base is the instruction address; only the saved
+                 * return address is PC + instruction length. */
+                SET_JUMP((uint32_t)((int32_t)pc + (int32_t)GETR(b1 & 0xf)));
                 break;
             }
             if((b1 & 0xf0) == 0xa0) {
