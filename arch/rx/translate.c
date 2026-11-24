@@ -780,7 +780,17 @@ static void gen_write_control(DisasContextBase *base, int cr, TCGv value)
         case 1: break;
         case 2: tcg_gen_mov_tl(cpu_usp, value); break;
         case 3: gen_helper_rx_write_fpsw(cpu_env, value); break;
-        case 10: tcg_gen_mov_tl(cpu_isp, value); break;
+        case 8: case 9: case 11: case 12: case 13:
+            /* In user mode, writes to these control registers are ignored. */
+            if(base->mem_idx != MMU_USER_IDX) {
+                tcg_gen_st_tl(value, cpu_env, control_offset(cr));
+            }
+            break;
+        case 10:
+            if(base->mem_idx != MMU_USER_IDX) {
+                tcg_gen_mov_tl(cpu_isp, value);
+            }
+            break;
         default: tcg_gen_st_tl(value, cpu_env, control_offset(cr)); break;
     }
 }
@@ -1359,9 +1369,14 @@ static bool gen_unary_group(RXDecode *d)
 
 static void gen_flag(RXDecode *d, uint8_t b1)
 {
-    static const int flag_map[16] = { 0, 1, 2, 3, 0, 0, 0, 0, 16, 17, 0, 0, 0, 0, 0, 0 };
-    uint32_t bit = 1u << flag_map[b1 & 15];
+    uint32_t bit = rx_psw_flag_bit(b1);
 
+    /* In user mode the I and U bits cannot be changed by SETPSW/CLRPSW.  The
+     * processor mode is fixed for the lifetime of a TB, so this is known at
+     * translation time. */
+    if(d->base->mem_idx == MMU_USER_IDX && (bit & (PSW_I | PSW_U))) {
+        return;
+    }
     if(b1 & 0x10) {
         tcg_gen_andi_tl(cpu_psw, cpu_psw, ~bit);
     } else {

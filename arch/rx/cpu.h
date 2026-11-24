@@ -141,7 +141,22 @@ _Static_assert(offsetof(CPUState, interrupt_lock) > offsetof(CPUState, current_t
 
 static inline int cpu_mmu_index(CPUState *env)
 {
-    return (env->psw & PSW_U) ? MMU_USER_IDX : MMU_KERNEL_IDX;
+    /* PSW.PM selects user/supervisor mode.  PSW.U only selects whether R0
+     * aliases USP or ISP and must not affect the MMU mode. */
+    return (env->psw & PSW_PM) ? MMU_USER_IDX : MMU_KERNEL_IDX;
+}
+
+/* PSW direct operand used by SETPSW/CLRPSW.  The defined selectors are
+ * 0-3 (C, Z, S, O), 8 (I) and 9 (U).  Reserved selectors are undefined by
+ * the ISA; keep the GNU RX simulator behaviour (everything else selects C)
+ * so both execution paths stay identical. */
+static inline uint32_t rx_psw_flag_bit(unsigned selector)
+{
+    static const uint8_t flag_bit[16] = {
+        0, 1, 2, 3, 0, 0, 0, 0, 16, 17, 0, 0, 0, 0, 0, 0
+    };
+
+    return 1u << flag_bit[selector & 15];
 }
 
 typedef struct DisasContext DisasContext;

@@ -614,12 +614,12 @@ static int rx_set_control_register(CPUState *env, int cr, uint32_t value)
         case 0x2: env->usp = value; return 1;
         case 0x3: helper_rx_write_fpsw(env, value); return 1;
         case 0x4: env->cpen = value; return 1;
-        case 0x8: env->bpsw = value; return 1;
-        case 0x9: env->bpc = value; return 1;
-        case 0xa: env->isp = value; return 1;
-        case 0xb: env->fintv = value; return 1;
-        case 0xc: env->intb = value; return 1;
-        case 0xd: env->extb = value; return 1;
+        case 0x8: if(!(env->psw & PSW_PM)) env->bpsw = value; return 1;
+        case 0x9: if(!(env->psw & PSW_PM)) env->bpc = value; return 1;
+        case 0xa: if(!(env->psw & PSW_PM)) env->isp = value; return 1;
+        case 0xb: if(!(env->psw & PSW_PM)) env->fintv = value; return 1;
+        case 0xc: if(!(env->psw & PSW_PM)) env->intb = value; return 1;
+        case 0xd: if(!(env->psw & PSW_PM)) env->extb = value; return 1;
         default: return 0;
     }
 }
@@ -1689,18 +1689,16 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 break;
             }
             if((b1 & 0xf0) == 0xa0) {
-                static const int flag_map[16] = { 0, 1, 2, 3, 0, 0, 0, 0, 16, 17, 0, 0, 0, 0, 0, 0 };
-                int bit = flag_map[b1 & 0xf];
-                if(ex) {
-                    env->psw |= (1u << bit);
+                uint32_t bit = rx_psw_flag_bit(b1);
+                if(ex && !((env->psw & PSW_PM) && (bit & (PSW_I | PSW_U)))) {
+                    env->psw |= bit;
                 }
                 break;
             }
             if((b1 & 0xf0) == 0xb0) {
-                static const int flag_map[16] = { 0, 1, 2, 3, 0, 0, 0, 0, 16, 17, 0, 0, 0, 0, 0, 0 };
-                int bit = flag_map[b1 & 0xf];
-                if(ex) {
-                    env->psw &= ~(1u << bit);
+                uint32_t bit = rx_psw_flag_bit(b1);
+                if(ex && !((env->psw & PSW_PM) && (bit & (PSW_I | PSW_U)))) {
+                    env->psw &= ~bit;
                 }
                 break;
             }
