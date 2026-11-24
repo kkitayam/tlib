@@ -672,7 +672,8 @@ static inline void rx_dsp_mvtac(CPUState *env, int select, int selector, uint32_
     __int128 value = rx_get_acc(env, select);
     switch(selector) {
         case 0: /* MVTACHI: bits 63-32, guard bits follow the sign of src */
-            value = (value & (__int128)0xffffffff) | ((__int128)(int32_t)src << 32);
+            value = (value & (__int128)0xffffffff) |
+                    ((__int128)(int32_t)src * ((__int128)1 << 32));
             break;
         case 1: /* MVTACLO: bits 31-0 */
             value = (value & ~(__int128)0xffffffff) | (__int128)src;
