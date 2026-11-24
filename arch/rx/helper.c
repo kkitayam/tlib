@@ -96,6 +96,11 @@ static uint32_t rx_store_mmio_result(CPUState *env, TranslationBlock *tb)
     return tb_invalidated_flag && !rx_tb_is_cached(tb);
 }
 
+/* helper_rx_store_check() runs immediately after a successful store.  If that
+ * store invalidated its own TLB entry (one-shot mapping, or a host callback
+ * that dropped the write mapping), the entry no longer matches, but the iotlb
+ * slot still describes the page just accessed.  No other access can have
+ * reused the slot in between, so the iotlb marker is still valid here. */
 static __attribute__((always_inline)) inline bool
 rx_tlb_had_nonexecutable_mmio(CPUState *env, uint32_t mmu_idx, unsigned index)
 {
