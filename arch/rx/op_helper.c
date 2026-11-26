@@ -1187,11 +1187,11 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
             break;
 
         case 0x04: /* BRA.A */
-            SET_JUMP((uint32_t)((int32_t)pc + (int32_t)rx_read_imm(&r, 3)));
+            SET_JUMP(pc + (uint32_t)rx_read_imm(&r, 3));
             break;
 
         case 0x05: { /* BSR.A */
-            uint32_t target = (uint32_t)((int32_t)pc + (int32_t)rx_read_imm(&r, 3));
+            uint32_t target = pc + (uint32_t)rx_read_imm(&r, 3);
             rx_push(env, ex, pc + r.off);
             SET_JUMP(target);
             break;
@@ -1199,7 +1199,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
 
         case 0x08: case 0x09: case 0x0a: case 0x0b:
         case 0x0c: case 0x0d: case 0x0e: case 0x0f: /* BRA.S */
-            SET_JUMP((uint32_t)((int32_t)pc + dsp3_map[b0 & 7]));
+            SET_JUMP(pc + dsp3_map[b0 & 7]);
             break;
 
         case 0x10: case 0x11: case 0x12: case 0x13:
@@ -1207,7 +1207,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
         case 0x18: case 0x19: case 0x1a: case 0x1b:
         case 0x1c: case 0x1d: case 0x1e: case 0x1f: /* BNE.S */
             if(rx_condition_true(env, (b0 >> 3) & 1)) {
-                SET_JUMP((uint32_t)((int32_t)pc + dsp3_map[b0 & 7]));
+                SET_JUMP(pc + dsp3_map[b0 & 7]);
             }
             break;
 
@@ -1218,26 +1218,26 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
             int cond = b0 & 0xf;
             int8_t disp = (int8_t)rx_next8(&r);
             if(rx_condition_true(env, cond)) {
-                SET_JUMP((uint32_t)((int32_t)pc + disp));
+                SET_JUMP(pc + (uint32_t)disp);
             }
             break;
         }
 
         case 0x38: /* BRA.W */
-            SET_JUMP((uint32_t)((int32_t)pc + (int16_t)rx_next16(&r)));
+            SET_JUMP(pc + (uint32_t)(int16_t)rx_next16(&r));
             break;
 
         case 0x39: { /* BSR.W */
             int16_t disp = (int16_t)rx_next16(&r);
             rx_push(env, ex, pc + r.off);
-            SET_JUMP((uint32_t)((int32_t)pc + disp));
+            SET_JUMP(pc + (uint32_t)disp);
             break;
         }
 
         case 0x3a: { /* BEQ.W */
             int16_t disp = (int16_t)rx_next16(&r);
             if(rx_condition_true(env, 0)) {
-                SET_JUMP((uint32_t)((int32_t)pc + disp));
+                SET_JUMP(pc + (uint32_t)disp);
             }
             break;
         }
@@ -1245,7 +1245,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
         case 0x3b: { /* BNE.W */
             int16_t disp = (int16_t)rx_next16(&r);
             if(rx_condition_true(env, 1)) {
-                SET_JUMP((uint32_t)((int32_t)pc + disp));
+                SET_JUMP(pc + (uint32_t)disp);
             }
             break;
         }
@@ -1683,15 +1683,13 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 SET_JUMP(GETR(b1 & 0xf));
                 break;
             }
-            if(hi == 0x40) {
-                SET_JUMP((uint32_t)((int32_t)pc + (int32_t)GETR(b1 & 0xf)));
-                break;
-            }
-            if(hi == 0x50) {
-                rx_push(env, ex, pc + r.off);
-                /* The branch base is the instruction address; only the saved
-                 * return address is PC + instruction length. */
-                SET_JUMP((uint32_t)((int32_t)pc + (int32_t)GETR(b1 & 0xf)));
+            if(hi == 0x40 || hi == 0x50) {
+                if(hi == 0x50) {
+                    /* The branch base is the instruction address; only the
+                     * saved return address is PC + instruction length. */
+                    rx_push(env, ex, pc + r.off);
+                }
+                SET_JUMP(pc + GETR(b1 & 0xf));
                 break;
             }
             if((b1 & 0xf0) == 0xa0) {

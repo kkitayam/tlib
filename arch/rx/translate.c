@@ -1026,9 +1026,7 @@ static bool gen_reg_branch(RXDecode *d)
         gen_push_return(d);
     }
     gen_read_reg(target, reg);
-    if(hi == 0x40) {
-        tcg_gen_addi_tl(target, target, d->pc);
-    } else if(hi == 0x50) {
+    if(hi == 0x40 || hi == 0x50) {
         /* BSR.L Rn branches to the instruction address plus Rn.  Only the
          * return address pushed on the stack uses the next instruction. */
         tcg_gen_addi_tl(target, target, d->pc);
