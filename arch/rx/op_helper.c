@@ -348,7 +348,9 @@ static void rx_do_shift(CPUState *env, int ex, int kind, int count, int src_reg,
     for(int i = 0; i < count; i++) {
         carry = (kind == 2) ? ((val & 0x80000000LL) != 0) : ((val & 1LL) != 0);
         if(kind == 2) {
-            val <<= 1;
+            /* Shift the 32-bit pattern so a negative value is never shifted
+             * as a signed integer. */
+            val = (int64_t)((uint32_t)val << 1);
         } else if(kind == 1) {
             val >>= 1;
         } else {
