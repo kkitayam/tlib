@@ -1735,33 +1735,32 @@ static bool gen_extended_0xfc(RXDecode *d)
         int bit = (b1 >> 2) & 7;
         int cond = b2 & 15;
         int dst = b2 >> 4;
-        TCGv value = tcg_temp_new(), address = tcg_temp_new();
+        TCGv value = tcg_temp_new();
 
         if(sd == 3) {
             gen_read_reg(value, dst);
+            gen_bit_cond_value(value, bit, cond);
+            gen_write_reg(dst, value);
+            tcg_temp_free(value);
         } else {
             uint32_t displacement = rx_disp(d, sd, 1);
+            TCGv address = tcg_temp_new();
 
-            address = tcg_temp_new();
             rx_sync_pc(d);
             gen_address_reg(address, dst, displacement);
             gen_load_mem(value, address, 1, false, d->base->mem_idx);
-        }
-        gen_bit_cond_value(value, bit, cond);
-        if(sd == 3) {
-            gen_write_reg(dst, value);
-        } else {
+            gen_bit_cond_value(value, bit, cond);
             gen_store_mem(d->base, value, address, 1);
+            tcg_temp_free(address);
+            tcg_temp_free(value);
         }
-        tcg_temp_free(address);
-        tcg_temp_free(value);
         return true;
     }
 
     {
         int rsrc = b2 >> 4;
         int rdst = b2 & 15;
-        TCGv src, dst;
+        TCGv src;
 
         switch(b1) {
             case 0x03: case 0x07: case 0x0b: case 0x0f:
@@ -1774,7 +1773,6 @@ static bool gen_extended_0xfc(RXDecode *d)
                 return false;
         }
         src = tcg_temp_new();
-        dst = tcg_temp_new();
         gen_read_reg(src, rsrc);
         switch(b1) {
             case 0x03:
@@ -1818,7 +1816,6 @@ static bool gen_extended_0xfc(RXDecode *d)
                 gen_int_float(rdst, src, true, d->pc);
                 break;
         }
-        tcg_temp_free(dst);
         tcg_temp_free(src);
         return true;
     }
