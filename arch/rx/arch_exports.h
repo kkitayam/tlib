@@ -26,6 +26,10 @@ void tlib_rx_set_nmi_pending(uint32_t pending);
  * callback until all executions have stopped. The callback must acknowledge
  * only the matching source generation and publish the next ICU candidate. */
 void tlib_rx_set_interrupt_acknowledge_callback(rx_acknowledge_callback_t callback);
+/* Call only while the CPU is stopped. A nonzero value forces the instruction
+ * interpreter; zero restores normal TCG translation with its usual fallbacks.
+ * Changing the mode flushes cached translations. CPU reset preserves it. */
+void tlib_rx_set_force_interpreter(uint32_t enabled);
 void tlib_rx_reset_store_stats(void);
 uint64_t tlib_rx_get_store_checks(void);
 uint64_t tlib_rx_get_store_mmio_fast(void);

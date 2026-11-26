@@ -2352,7 +2352,7 @@ int gen_intermediate_code(CPUState *env, DisasContextBase *base)
     dc->has_store = false;
     tcg_gen_insn_start(base->pc);
     bool near_page_end = (base->pc & (TARGET_PAGE_SIZE - 1)) >= TARGET_PAGE_SIZE - RX_DECODE_PAGE_GUARD;
-    int length = near_page_end ? 0 : gen_rx_insn(base);
+    int length = (near_page_end || env->force_interpreter) ? 0 : gen_rx_insn(base);
     if(length == 0) {
         /* Decode near the boundary at runtime so a fetch fault cannot discard
          * earlier instructions or escape while no TB is running. */

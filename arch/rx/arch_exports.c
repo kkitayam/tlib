@@ -115,6 +115,17 @@ void tlib_set_single_step(uint32_t enabled)
 
 EXC_VOID_1(tlib_set_single_step, uint32_t, enabled)
 
+void tlib_rx_set_force_interpreter(uint32_t enabled)
+{
+    bool new_value = enabled != 0;
+    if(cpu->force_interpreter != new_value) {
+        cpu->force_interpreter = new_value;
+        tb_flush(cpu);
+    }
+}
+
+EXC_VOID_1(tlib_rx_set_force_interpreter, uint32_t, enabled)
+
 void tlib_rx_reset_store_stats(void)
 {
     rx_store_stats_reset();

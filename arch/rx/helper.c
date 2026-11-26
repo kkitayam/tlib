@@ -464,6 +464,7 @@ void cpu_reset(CPUState *env)
 
 int cpu_init(const char *cpu_model)
 {
+    env->force_interpreter = false;
     env->is_v3 = false;
     if(cpu_model == NULL || cpu_model[0] == '\0' || strcasecmp(cpu_model, "rxv2") == 0 ||
        strcasecmp(cpu_model, "rx") == 0 || strcasecmp(cpu_model, "rxv1") == 0) {

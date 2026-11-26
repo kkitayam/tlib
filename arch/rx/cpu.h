@@ -128,6 +128,7 @@ typedef struct CPUState {
     bool singlestep_enabled;
 
     CPU_COMMON
+    bool force_interpreter;
     bool store_stats_enabled;
     uint64_t store_check_count;
     uint64_t store_mmio_fast_count;
