@@ -98,14 +98,24 @@ static uint32_t rx_store_mmio_result(CPUState *env, TranslationBlock *tb)
 
 /* helper_rx_store_check() runs immediately after a successful store.  If that
  * store invalidated its own TLB entry (one-shot mapping, or a host callback
- * that dropped the write mapping), the entry no longer matches, but the iotlb
- * slot still describes the page just accessed.  No other access can have
- * reused the slot in between, so the iotlb marker is still valid here. */
-static __attribute__((always_inline)) inline bool
-rx_tlb_had_nonexecutable_mmio(CPUState *env, uint32_t mmu_idx, unsigned index)
+ * that dropped the write mapping), the entry no longer matches and the iotlb
+ * slot may have been reused by a callback.  Translate the page again instead
+ * of trusting the slot: this is rare, while the common path keeps using the
+ * matching entry. */
+static bool rx_store_page_is_nonexecutable_mmio(CPUState *env, target_ulong address, uint32_t size, uint32_t mmu_idx)
 {
-    target_phys_addr_t encoded = env->iotlb[mmu_idx][index] & ~TARGET_PAGE_MASK;
-    return encoded > IO_MEM_ROM && encoded != IO_MEM_NOTDIRTY && !(encoded & IO_MEM_EXECUTABLE_IO);
+    unsigned index = (address >> TARGET_PAGE_BITS) & (CPU_TLB_SIZE - 1);
+    target_ulong page = address & TARGET_PAGE_MASK;
+    target_ulong entry = env->tlb_table[mmu_idx][index].addr_write;
+
+    if((entry & (TARGET_PAGE_MASK | TLB_INVALID_MASK)) != page) {
+        if(tlb_fill(env, address, 1, mmu_idx, NULL, 1, size) != TRANSLATE_SUCCESS) {
+            return false;
+        }
+        entry = env->tlb_table[mmu_idx][index].addr_write;
+    }
+    return (entry & (TARGET_PAGE_MASK | TLB_INVALID_MASK)) == page &&
+           (entry & TLB_MMIO) && !(entry & IO_MEM_EXECUTABLE_IO);
 }
 
 uint32_t helper_rx_store_check(CPUState *env, TranslationBlock *tb, target_ulong address, uint32_t size, uint32_t mmu_idx)
@@ -118,8 +128,9 @@ uint32_t helper_rx_store_check(CPUState *env, TranslationBlock *tb, target_ulong
     }
 
     bool entry_matches = (entry & (TARGET_PAGE_MASK | TLB_INVALID_MASK)) == page;
-    bool nonexecutable_mmio = entry_matches && (entry & TLB_MMIO) && !(entry & IO_MEM_EXECUTABLE_IO);
-    nonexecutable_mmio |= !entry_matches && rx_tlb_had_nonexecutable_mmio(env, mmu_idx, index);
+    bool nonexecutable_mmio = entry_matches
+                              ? (entry & TLB_MMIO) && !(entry & IO_MEM_EXECUTABLE_IO)
+                              : rx_store_page_is_nonexecutable_mmio(env, address, size, mmu_idx);
     if(nonexecutable_mmio &&
        (address & ~TARGET_PAGE_MASK) <= TARGET_PAGE_SIZE - size) {
         return rx_store_mmio_result(env, tb);
