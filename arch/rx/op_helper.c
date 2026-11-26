@@ -2262,6 +2262,10 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 }
                 b2 = rx_next8(&r);
                 sub = (b2 >> 4) & 0xf;
+                /* SAVE and RSTR are privileged instructions in RXv3. */
+                if(ex && (env->psw & PSW_PM)) {
+                    rx_raise_privileged(env);
+                }
                 if(sub == 0xc || sub == 0xd) {
                     int bank = (int)GETR(b2 & 0xf);
                     (void)rx_next8(&r);
