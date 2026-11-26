@@ -606,8 +606,9 @@ static int rx_set_control_register(CPUState *env, int cr, uint32_t value)
             value &= ~PSW_PM;
             value |= pm;
             if(pm != 0) {
+                /* Writes to PM, I, U and IPL are ignored in user mode. */
                 value &= ~(PSW_I | PSW_U | PSW_IPL_MASK);
-                value |= pm;
+                value |= env->psw & (PSW_I | PSW_U | PSW_IPL_MASK);
             }
             env->psw = value;
             return 1;

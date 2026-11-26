@@ -763,14 +763,20 @@ static void gen_write_control(DisasContextBase *base, int cr, TCGv value)
     switch(cr) {
         case 0: {
             TCGv pm = tcg_temp_new(), sanitized = tcg_temp_new(), user_value = tcg_temp_new();
+            TCGv preserved = tcg_temp_new();
             TCGv zero = tcg_const_tl(0);
 
             tcg_gen_andi_tl(pm, cpu_psw, PSW_PM);
             tcg_gen_andi_tl(sanitized, value, ~PSW_PM);
+            /* In user mode, writes to PM, I, U and IPL are ignored, so keep
+             * the current values instead of clearing them. */
+            tcg_gen_andi_tl(preserved, cpu_psw, PSW_I | PSW_U | PSW_IPL_MASK);
             tcg_gen_andi_tl(user_value, sanitized, ~(PSW_I | PSW_U | PSW_IPL_MASK));
+            tcg_gen_or_tl(user_value, user_value, preserved);
             tcg_gen_or_tl(user_value, user_value, pm);
             tcg_gen_movcond_tl(TCG_COND_NE, cpu_psw, pm, zero, user_value, sanitized);
             tcg_temp_free(zero);
+            tcg_temp_free(preserved);
             tcg_temp_free(user_value);
             tcg_temp_free(sanitized);
             tcg_temp_free(pm);
