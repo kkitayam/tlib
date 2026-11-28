@@ -1735,7 +1735,6 @@ static bool gen_extended_0xfc(RXDecode *d)
             gen_read_reg(value, dst);
             gen_bit_cond_value(value, bit, cond);
             gen_write_reg(dst, value);
-            tcg_temp_free(value);
         } else {
             uint32_t displacement = rx_disp(d, sd, 1);
             TCGv address = tcg_temp_new();
@@ -1746,8 +1745,8 @@ static bool gen_extended_0xfc(RXDecode *d)
             gen_bit_cond_value(value, bit, cond);
             gen_store_mem(d->base, value, address, 1);
             tcg_temp_free(address);
-            tcg_temp_free(value);
         }
+        tcg_temp_free(value);
         return true;
     }
 
