@@ -749,6 +749,9 @@ static void rx_do_scmpu(CPUState *env, int ex)
     r1 = rx_get_r(env, 1);
     r2 = rx_get_r(env, 2);
     count = rx_get_r(env, 3);
+    if(count == 0) {
+        return;
+    }
 
     while(count != 0) {
         uma = rx_ldub(env, r1++);
@@ -764,7 +767,7 @@ static void rx_do_scmpu(CPUState *env, int ex)
     if(uma == umb) {
         rx_set_zc(env, ex, 1, 1);
     } else {
-        rx_set_zc(env, ex, 0, (int32_t)uma - (int32_t)umb >= 0);
+        rx_set_zc(env, ex, 0, uma >= umb);
     }
 }
 
@@ -865,7 +868,10 @@ static void rx_do_suntil(CPUState *env, int ex, int sz, int while_not_equal)
     }
     r1 = rx_get_r(env, 1);
     count = rx_get_r(env, 3);
-    uma = rx_get_r(env, 2) & ((size == 1) ? 0xffu : ((size == 2) ? 0xffffu : 0xffffffffu));
+    if(count == 0) {
+        return;
+    }
+    uma = rx_get_r(env, 2);
 
     while(count != 0) {
         count--;
@@ -880,13 +886,14 @@ static void rx_do_suntil(CPUState *env, int ex, int sz, int while_not_equal)
     if(uma == umb) {
         rx_set_zc(env, ex, 1, 1);
     } else {
-        rx_set_zc(env, ex, 0, (int32_t)uma - (int32_t)umb >= 0);
+        rx_set_zc(env, ex, 0, umb >= uma);
     }
 }
 
 static void rx_do_rmpa(CPUState *env, int ex, int sz)
 {
     uint32_t r1, r2, count, r4, r5, r6;
+    __int128 acc;
     int size = 1 << sz;
 
     if(!ex) {
