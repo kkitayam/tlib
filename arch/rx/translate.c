@@ -288,6 +288,22 @@ static void gen_unary(int op, int src_reg, int dst_reg)
     tcg_temp_free(src);
 }
 
+static void gen_satr(void)
+{
+    TCGv overflow = tcg_temp_new();
+    int done = gen_new_label();
+
+    tcg_gen_andi_tl(overflow, cpu_psw, PSW_OVERFLOW);
+    tcg_gen_brcondi_tl(TCG_COND_EQ, overflow, 0, done);
+    tcg_temp_free(overflow);
+
+    /* Replicate PSW.S across the high word of the saturated result. */
+    tcg_gen_sextract_i32(cpu_regs[6], cpu_psw, 2, 1);
+    tcg_gen_xori_tl(cpu_regs[5], cpu_regs[6], INT32_MAX);
+    tcg_gen_not_tl(cpu_regs[4], cpu_regs[6]);
+    gen_set_label(done);
+}
+
 static void gen_bit_test(TCGv value)
 {
     TCGv zero = tcg_temp_new();
@@ -2304,6 +2320,11 @@ static int gen_rx_insn(DisasContextBase *base)
             }
             if((b1 & 0xe0) == 0xa0) {
                 gen_flag(&d, rx_next8(&d));
+                return d.length;
+            }
+            if(b1 == 0x93) {
+                rx_next8(&d);
+                gen_satr();
                 return d.length;
             }
             return 0;
