@@ -1277,7 +1277,7 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
             }
             count = last - first + 1;
             if(ex) {
-                rx_set_r(env, 0, (uint32_t)((int32_t)rx_get_r(env, 0) + (int32_t)disp - count * 4));
+                rx_set_r(env, 0, rx_get_r(env, 0) + disp - (uint32_t)count * 4u);
                 for(i = first; i <= last; i++) {
                     rx_set_r(env, i, rx_pop(env, ex));
                 }
