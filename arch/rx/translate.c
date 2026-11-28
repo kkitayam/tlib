@@ -1756,10 +1756,17 @@ static bool gen_extended_0xfc(RXDecode *d)
         TCGv src;
 
         switch(b1) {
-            case 0x03: case 0x07: case 0x0b: case 0x0f:
+            case 0x07:
+            case 0x0f:
+                gen_unary(b1 == 0x07 ? 1 : 2, rsrc, rdst);
+                return true;
+            case 0x3b:
+                gen_reg_logic(0x3b, rsrc, rdst);
+                return true;
+            case 0x03: case 0x0b:
             case 0x13: case 0x17: case 0x1b: case 0x1f:
             case 0x23: case 0x27: case 0x33: case 0x37:
-            case 0x3b: case 0x47: case 0x4b: case 0x4f:
+            case 0x47: case 0x4b: case 0x4f:
             case 0x57:
                 break;
             default:
@@ -1771,14 +1778,8 @@ static bool gen_extended_0xfc(RXDecode *d)
             case 0x03:
                 gen_carry_alu(rdst, src, true);
                 break;
-            case 0x07:
-                gen_unary(1, rsrc, rdst);
-                break;
             case 0x0b:
                 gen_carry_alu(rdst, src, false);
-                break;
-            case 0x0f:
-                gen_unary(2, rsrc, rdst);
                 break;
             case 0x13:
             case 0x17:
@@ -1798,9 +1799,6 @@ static bool gen_extended_0xfc(RXDecode *d)
                 break;
             case 0x27:
                 gen_division(rdst, src, false);
-                break;
-            case 0x3b:
-                gen_reg_logic(0x3b, rsrc, rdst);
                 break;
             case 0x47:
                 gen_int_float(rdst, src, false, d->pc);
