@@ -213,7 +213,6 @@ static void gen_shift_reg(int kind, int count_reg, int dst_reg)
 static void gen_rotate(int reg, TCGv count, bool left)
 {
     TCGv src = tcg_temp_new(), result = tcg_temp_new(), carry = tcg_temp_new();
-    TCGv zero = tcg_const_tl(0);
     gen_read_reg(src, reg);
     if(left) {
         tcg_gen_rotl_tl(result, src, count);
@@ -222,12 +221,10 @@ static void gen_rotate(int reg, TCGv count, bool left)
         tcg_gen_rotr_tl(result, src, count);
         tcg_gen_shri_tl(carry, result, 31);
     }
-    tcg_gen_movcond_tl(TCG_COND_EQ, carry, count, zero, zero, carry);
     tcg_gen_andi_tl(cpu_psw, cpu_psw, ~PSW_CARRY);
     tcg_gen_or_tl(cpu_psw, cpu_psw, carry);
     gen_sz_flags(result);
     gen_write_reg(reg, result);
-    tcg_temp_free(zero);
     tcg_temp_free(carry);
     tcg_temp_free(result);
     tcg_temp_free(src);

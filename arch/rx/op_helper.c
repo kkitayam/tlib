@@ -2226,16 +2226,17 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                 int count = ((b1 & 1) << 4) | ((b2 >> 4) & 0xf);
                 int rd = b2 & 0xf;
                 uint32_t v = GETR(rd);
-                int carry = 0;
+                int carry;
                 for(int i = 0; i < count; i++) {
                     if(b1 & 2) {
-                        carry = (v & 0x80000000u) != 0;
                         v = (v << 1) | (v >> 31);
                     } else {
-                        carry = (v & 1) != 0;
                         v = (v >> 1) | (v << 31);
                     }
                 }
+                /* The output bit is the destination bit after the rotation,
+                 * including a rotation amount of zero. */
+                carry = (b1 & 2) ? ((v & 1) != 0) : ((v >> 31) != 0);
                 rx_set_szc(env, ex, v, 4, carry);
                 SETR(rd, v);
                 break;
@@ -2408,11 +2409,11 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                     int count = (int)GETR((b2 >> 4) & 0xf) & 31;
                     int rd = b2 & 0xf;
                     uint32_t v = GETR(rd);
-                    int c = 0;
+                    int c;
                     for(int i = 0; i < count; i++) {
-                        c = (v & 1) != 0;
                         v = (v >> 1) | (v << 31);
                     }
+                    c = (v >> 31) != 0;
                     rx_set_szc(env, ex, v, 4, c);
                     SETR(rd, v);
                     break;
@@ -2428,11 +2429,11 @@ static int rx_execute(CPUState *env, uint32_t pc, int ex)
                     int count = (int)GETR((b2 >> 4) & 0xf) & 31;
                     int rd = b2 & 0xf;
                     uint32_t v = GETR(rd);
-                    int c = 0;
+                    int c;
                     for(int i = 0; i < count; i++) {
-                        c = (v & 0x80000000u) != 0;
                         v = (v << 1) | (v >> 31);
                     }
+                    c = (v & 1) != 0;
                     rx_set_szc(env, ex, v, 4, c);
                     SETR(rd, v);
                     break;
