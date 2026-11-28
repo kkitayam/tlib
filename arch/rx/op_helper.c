@@ -895,28 +895,29 @@ static void rx_do_rmpa(CPUState *env, int ex, int sz)
     r1 = rx_get_r(env, 1);
     r2 = rx_get_r(env, 2);
     count = rx_get_r(env, 3);
-    r4 = rx_get_r(env, 4);
-    r5 = rx_get_r(env, 5);
-    r6 = rx_get_r(env, 6);
+    if(count == 0) {
+        return;
+    }
+    /* Build the 80-bit accumulator without shifting a negative value. */
+    acc = (__int128)(int16_t)rx_get_r(env, 6) * ((__int128)1 << 64)
+        + ((__int128)rx_get_r(env, 5) << 32)
+        + (__int128)rx_get_r(env, 4);
 
     while(count != 0) {
         int32_t ma = (int32_t)rx_read_mem(env, ex, r1, size, 1);
         int32_t mb = (int32_t)rx_read_mem(env, ex, r2, size, 1);
-        int64_t sll;
-        uint64_t tmp;
 
         r1 += (uint32_t)size;
         r2 += (uint32_t)size;
-        sll = (int64_t)ma * (int64_t)mb;
-        tmp = (uint64_t)r4 + (uint64_t)(uint32_t)sll;
-        r4 = (uint32_t)tmp;
-        tmp >>= 32;
-        tmp += (uint64_t)r5 + (uint64_t)(uint32_t)(sll >> 32);
-        r5 = (uint32_t)tmp;
-        tmp >>= 32;
-        tmp += (uint64_t)r6 + (uint64_t)(uint32_t)(sll >> 32);
-        r6 = (uint32_t)tmp;
+        acc += (int64_t)ma * (int64_t)mb;
         count--;
+    }
+
+    r4 = (uint32_t)acc;
+    r5 = (uint32_t)(acc >> 32);
+    r6 = (uint32_t)(acc >> 64) & 0xffffu;
+    if(r6 & 0x00008000u) {
+        r6 |= 0xffff0000u;
     }
 
     rx_set_r(env, 1, r1);
@@ -924,19 +925,13 @@ static void rx_do_rmpa(CPUState *env, int ex, int sz)
     rx_set_r(env, 3, count);
     rx_set_r(env, 4, r4);
     rx_set_r(env, 5, r5);
-    if(r6 & 0x00008000u) {
-        r6 |= 0xffff0000u;
-    } else {
-        r6 &= 0x0000ffffu;
-    }
     rx_set_r(env, 6, r6);
 
-    uint32_t s = (r6 & 0x80000000u) ? PSW_SIGN : 0;
-    if(r6 != 0 && r6 != 0xffffffffu) {
-        env->psw = (env->psw & ~(PSW_SIGN | PSW_OVERFLOW)) | s | PSW_OVERFLOW;
-    } else {
-        env->psw = (env->psw & ~(PSW_SIGN | PSW_OVERFLOW)) | s;
+    uint32_t f = (r6 & 0x80000000u) ? PSW_SIGN : 0;
+    if(acc > INT64_MAX || acc < INT64_MIN) {
+        f |= PSW_OVERFLOW;
     }
+    env->psw = (env->psw & ~(PSW_SIGN | PSW_OVERFLOW)) | f;
 }
 
 static void rx_do_satr(CPUState *env, int ex)
