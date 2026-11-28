@@ -1660,11 +1660,10 @@ static bool gen_extended_0xfc(RXDecode *d)
         int op = fop - 0x20;
         TCGv src, dst;
 
-        if(op < 0 || (op > RX_FPU_DIV && op != RX_FPU_SQRT)) {
+        if(op == 7) { /* Reserved between ROUND and FSQRT. */
             return false;
         }
         src = tcg_temp_new();
-        dst = tcg_temp_new();
         rx_sync_pc(d);
         if(fsd == 3) {
             gen_read_reg(src, fsrc_reg);
@@ -1676,10 +1675,11 @@ static bool gen_extended_0xfc(RXDecode *d)
             gen_load_mem(src, address, 4, false, d->base->mem_idx);
             tcg_temp_free(address);
         }
-        if(op == RX_FPU_SQRT) {
-            tcg_gen_movi_tl(dst, 0);
-        } else {
+        if(op <= RX_FPU_DIV) {
+            dst = tcg_temp_new();
             gen_read_reg(dst, fdst_reg);
+        } else {
+            dst = tcg_const_tl(0);
         }
         if(op == RX_FPU_CMP) {
             gen_helper_rx_fcmp(cpu_env, dst, src);

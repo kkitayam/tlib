@@ -405,18 +405,22 @@ static bool rx_float_denormal(uint32_t value)
     return magnitude && magnitude < 0x00800000u;
 }
 
-static void rx_fpu_finish(CPUState *env, unsigned cause)
+static void rx_fpu_finish(CPUState *env, unsigned cause, void *retaddr)
 {
     uint32_t enabled = (env->fpsw & FPSW_ENABLE_MASK) >> 8;
     uint32_t sticky = (cause & enabled) || (cause & FPSW_CE) ? 0 : (cause & ~enabled & 0x7cu) << 24;
     env->fpsw = rx_fpsw_normalize((env->fpsw & ~FPSW_CAUSE_MASK) | cause | sticky);
     if((cause & enabled) || (cause & FPSW_CE)) {
+        if(retaddr) {
+            /* A TCG block may contain instructions after the fault. */
+            cpu_restore_state_and_restore_instructions_count(env, env->current_tb, (uintptr_t)retaddr, true);
+        }
         env->exception_index = EXCP_RX_FLOATING_POINT;
         cpu_loop_exit(env);
     }
 }
 
-static uint32_t rx_fpu(CPUState *env, int op, uint32_t dst, uint32_t src)
+static uint32_t rx_fpu_at(CPUState *env, int op, uint32_t dst, uint32_t src, void *retaddr)
 {
     static const int rounding[] = {
         float_round_nearest_even, float_round_to_zero, float_round_up, float_round_down
@@ -437,7 +441,7 @@ static uint32_t rx_fpu(CPUState *env, int op, uint32_t dst, uint32_t src)
         }
         if(!nan && (rx_float_denormal(src) || (binary && rx_float_denormal(dst)))) {
             if(!(env->fpsw & FPSW_DN)) {
-                rx_fpu_finish(env, FPSW_CE);
+                rx_fpu_finish(env, FPSW_CE, retaddr);
             }
             if(rx_float_denormal(src)) src &= 0x80000000u;
             if(binary && rx_float_denormal(dst)) dst &= 0x80000000u;
@@ -449,7 +453,7 @@ static uint32_t rx_fpu(CPUState *env, int op, uint32_t dst, uint32_t src)
             else if(binary && rx_float_nan(dst)) result = dst;
             else result = src;
             result |= 0x00400000u;
-            rx_fpu_finish(env, cause);
+            rx_fpu_finish(env, cause, retaddr);
             rx_set_sz(env, 1, result, 4);
             return result;
         }
@@ -483,7 +487,7 @@ static uint32_t rx_fpu(CPUState *env, int op, uint32_t dst, uint32_t src)
         cause |= FPSW_CU;
         flags &= ~float_flag_inexact;
         if(!(env->fpsw & FPSW_DN) && !(env->fpsw & FPSW_EU)) {
-            rx_fpu_finish(env, cause | FPSW_CE);
+            rx_fpu_finish(env, cause | FPSW_CE, retaddr);
         }
         result &= 0x80000000u;
     }
@@ -498,7 +502,7 @@ static uint32_t rx_fpu(CPUState *env, int op, uint32_t dst, uint32_t src)
             else result = (env->fpsw & FPSW_DN) ? 0xffffffffu : 0x7fffffffu;
         } else result = 0x7fffffffu;
     }
-    rx_fpu_finish(env, cause);
+    rx_fpu_finish(env, cause, retaddr);
     if(op == RX_FPU_FTOI || op == RX_FPU_FTOU || op == RX_FPU_ROUND) {
         rx_set_sz(env, 1, result, 4);
     } else {
@@ -511,7 +515,12 @@ static uint32_t rx_fpu(CPUState *env, int op, uint32_t dst, uint32_t src)
 
 target_ulong helper_rx_fpu(CPUState *env, target_ulong op, target_ulong dst, target_ulong src)
 {
-    return rx_fpu(env, op, dst, src);
+    return rx_fpu_at(env, op, dst, src, GETPC_INTERNAL());
+}
+
+static uint32_t rx_fpu(CPUState *env, int op, uint32_t dst, uint32_t src)
+{
+    return rx_fpu_at(env, op, dst, src, NULL);
 }
 
 static void rx_do_fcmp(CPUState *env, int ex, uint32_t a, uint32_t b)
@@ -521,13 +530,13 @@ static void rx_do_fcmp(CPUState *env, int ex, uint32_t a, uint32_t b)
     if(!ex) return;
     if(!rx_float_nan(a) && !rx_float_nan(b)) {
         if(rx_float_denormal(a) || rx_float_denormal(b)) {
-            if(!(env->fpsw & FPSW_DN)) rx_fpu_finish(env, FPSW_CE);
+            if(!(env->fpsw & FPSW_DN)) rx_fpu_finish(env, FPSW_CE, NULL);
             if(rx_float_denormal(a)) a &= 0x80000000u;
             if(rx_float_denormal(b)) b &= 0x80000000u;
         }
     }
     relation = float32_compare_quiet(a, b, &status);
-    rx_fpu_finish(env, get_float_exception_flags(&status) & float_flag_invalid ? FPSW_CV : 0);
+    rx_fpu_finish(env, get_float_exception_flags(&status) & float_flag_invalid ? FPSW_CV : 0, NULL);
     env->psw &= ~(PSW_ZERO | PSW_SIGN | PSW_OVERFLOW);
     if(relation == float_relation_equal) env->psw |= PSW_ZERO;
     if(relation == float_relation_less) env->psw |= PSW_SIGN;
