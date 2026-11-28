@@ -21,33 +21,20 @@ void translate_init(void)
     }
 }
 
+static TCGv gen_reg(int reg)
+{
+    DisasContext *dc = (DisasContext *)tcg->disas_context;
+    return reg == 0 ? dc->stack_pointer : cpu_regs[reg];
+}
+
 static void gen_read_reg(TCGv value, int reg)
 {
-    if(reg != 0) {
-        tcg_gen_mov_tl(value, cpu_regs[reg]);
-    } else {
-        TCGv mode = tcg_temp_new();
-        TCGv zero = tcg_const_tl(0);
-        tcg_gen_andi_tl(mode, cpu_psw, PSW_U);
-        tcg_gen_movcond_tl(TCG_COND_NE, value, mode, zero, cpu_usp, cpu_isp);
-        tcg_temp_free(zero);
-        tcg_temp_free(mode);
-    }
+    tcg_gen_mov_tl(value, gen_reg(reg));
 }
 
 static void gen_write_reg(int reg, TCGv value)
 {
-    if(reg != 0) {
-        tcg_gen_mov_tl(cpu_regs[reg], value);
-    } else {
-        TCGv mode = tcg_temp_new();
-        TCGv zero = tcg_const_tl(0);
-        tcg_gen_andi_tl(mode, cpu_psw, PSW_U);
-        tcg_gen_movcond_tl(TCG_COND_NE, cpu_usp, mode, zero, value, cpu_usp);
-        tcg_gen_movcond_tl(TCG_COND_EQ, cpu_isp, mode, zero, value, cpu_isp);
-        tcg_temp_free(zero);
-        tcg_temp_free(mode);
-    }
+    tcg_gen_mov_tl(gen_reg(reg), value);
 }
 
 static void gen_sz_flags(TCGv result)
@@ -520,8 +507,10 @@ static void rx_sync_pc(RXDecode *d)
 
 static void gen_load_mem(TCGv value, TCGv address, int size, bool is_signed, int mem_idx)
 {
+    DisasContext *dc = (DisasContext *)tcg->disas_context;
     TCGMemOp op = size == 1 ? (is_signed ? MO_SB : MO_UB) :
                   size == 2 ? (is_signed ? MO_LESW : MO_LEUW) : MO_LEUL;
+    dc->has_load = true;
     tcg_gen_qemu_ld_tl(value, address, mem_idx, op | MO_UNALN);
 }
 
@@ -2354,13 +2343,51 @@ void gen_sync_pc(DisasContext *dc)
 
 void setup_disas_context(DisasContextBase *base, CPUState *env)
 {
-    base->mem_idx = cpu_mmu_index(env);
-    ((DisasContext *)base)->is_v3 = env->is_v3;
+    DisasContext *dc = (DisasContext *)base;
+    base->mem_idx = base->tb->flags & RX_TB_MMU_MASK;
+    dc->stack_pointer = base->tb->flags & RX_TB_USE_USP ? cpu_usp : cpu_isp;
+    dc->is_v3 = env->is_v3;
+}
+
+/* Host callbacks can write PSW through the register API, including during
+ * block entry or an MMIO access. Re-dispatch at the instruction boundary. */
+static void gen_exit_on_mode_change(TranslationBlock *tb, uint32_t next_pc, uint32_t executed)
+{
+    uint32_t expected = tb->flags & RX_TB_USE_USP;
+    TCGv mode = tcg_temp_new();
+    int unchanged = gen_new_label();
+
+    if((tb->flags & RX_TB_MMU_MASK) == MMU_USER_IDX) {
+        expected |= PSW_PM;
+    }
+    tcg_gen_andi_tl(mode, cpu_psw, PSW_U | PSW_PM);
+    tcg_gen_brcondi_tl(TCG_COND_EQ, mode, expected, unchanged);
+    tcg_temp_free(mode);
+
+    if(executed != 0) {
+        tcg_gen_movi_tl(cpu_pc, next_pc);
+    }
+    TCGv_i32 count = tcg_const_i32(executed);
+    tcg_gen_st_i32(count, cpu_env, offsetof(CPUState, instructions_count_declaration));
+    if(cpu->block_finished_hook_present) {
+        TCGv first = tcg_const_tl(tb->pc);
+        gen_helper_block_finished_event(first, count);
+        tcg_temp_free(first);
+    }
+    tcg_temp_free_i32(count);
+    tcg_gen_exit_tb(0);
+    gen_set_label(unchanged);
+}
+
+void gen_block_header_arch_action(TranslationBlock *tb)
+{
+    gen_exit_on_mode_change(tb, tb->pc, 0);
 }
 
 int gen_intermediate_code(CPUState *env, DisasContextBase *base)
 {
     DisasContext *dc = (DisasContext *)base;
+    dc->has_load = false;
     dc->has_store = false;
     tcg_gen_insn_start(base->pc);
     bool near_page_end = (base->pc & (TARGET_PAGE_SIZE - 1)) >= TARGET_PAGE_SIZE - RX_DECODE_PAGE_GUARD;
@@ -2403,6 +2430,11 @@ int gen_intermediate_code(CPUState *env, DisasContextBase *base)
         }
         gen_set_label(done);
         tcg_temp_free_i32(dc->store_flags);
+    }
+
+    if((dc->has_load || dc->has_store) && base->is_jmp == DISAS_NEXT &&
+       !dc->stop_after_instruction && !env->singlestep_enabled) {
+        gen_exit_on_mode_change(base->tb, base->pc, base->tb->icount);
     }
 
     if(env->singlestep_enabled) {

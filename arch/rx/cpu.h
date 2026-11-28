@@ -37,6 +37,9 @@
 #define PSW_IPL_MASK 0x0F000000
 #define PSW_IPL_SHIFT 24
 
+#define RX_TB_MMU_MASK (NB_MMU_MODES - 1)
+#define RX_TB_USE_USP  PSW_U
+
 static inline uint32_t rx_fpsw_normalize(uint32_t fpsw)
 {
     fpsw &= 0x7c007dffu;
@@ -170,8 +173,10 @@ typedef struct DisasContext DisasContext;
 
 struct DisasContext {
     DisasContextBase base;
+    TCGv stack_pointer;
     bool stop_after_instruction;
     bool is_v3;
+    bool has_load;
     bool has_store;
     TCGv_i32 store_flags;
 };
@@ -186,7 +191,7 @@ static inline void cpu_get_tb_cpu_state(CPUState *env, target_ulong *pc, target_
 {
     *pc = env->pc;
     *cs_base = 0;
-    *flags = cpu_mmu_index(env);
+    *flags = cpu_mmu_index(env) | (env->psw & RX_TB_USE_USP);
 }
 
 static inline void cpu_pc_from_tb(CPUState *env, TranslationBlock *tb)
